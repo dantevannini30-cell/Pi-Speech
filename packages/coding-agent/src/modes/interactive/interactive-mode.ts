@@ -377,6 +377,9 @@ export class InteractiveMode {
 	private sttState: STTState = "idle";
 	private ttsState: TTSState = "idle";
 	private lastSpokenText = "";
+	private ttsBuffer = "";
+	private ttsFlushTimeout: ReturnType<typeof setTimeout> | null = null;
+	private readonly TTS_FLUSH_DELAY_MS = 600;
 
 	private options: InteractiveModeOptions;
 	private autoTrustOnReloadCwd: string | undefined;
@@ -2931,13 +2934,21 @@ export class InteractiveMode {
 						}
 					}
 
-					// TTS: speak new text content as it arrives
+					// TTS: buffer incoming text, speak on sentence boundaries or debounce
 					if (this.ttsService.enabled) {
 						const fullText = this.extractTextFromAssistantMessage(this.streamingMessage);
 						if (fullText && fullText.length > this.lastSpokenText.length) {
 							const newText = fullText.slice(this.lastSpokenText.length);
 							this.lastSpokenText = fullText;
-							this.ttsService.speak(newText);
+							this.ttsBuffer += newText;
+							// Flush on sentence boundary
+							if (/[.!?\n]$/.test(this.ttsBuffer.trim())) {
+								this.flushTtsBuffer();
+							} else {
+								// Debounce: flush after a quiet period
+								if (this.ttsFlushTimeout) clearTimeout(this.ttsFlushTimeout);
+								this.ttsFlushTimeout = setTimeout(() => this.flushTtsBuffer(), this.TTS_FLUSH_DELAY_MS);
+							}
 						}
 					}
 
@@ -2947,6 +2958,8 @@ export class InteractiveMode {
 
 			case "message_end":
 				if (event.message.role === "user") break;
+				// Flush any remaining TTS buffer
+				this.flushTtsBuffer();
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
 					let errorMessage: string | undefined;
@@ -5946,7 +5959,19 @@ export class InteractiveMode {
 		}, 3000);
 	}
 
+	private flushTtsBuffer(): void {
+		if (this.ttsFlushTimeout) {
+			clearTimeout(this.ttsFlushTimeout);
+			this.ttsFlushTimeout = null;
+		}
+		if (this.ttsBuffer.trim() && this.ttsService.enabled) {
+			this.ttsService.speak(this.ttsBuffer.trim());
+		}
+		this.ttsBuffer = "";
+	}
+
 	stop(): void {
+		this.flushTtsBuffer();
 		if (this.ttsService) {
 			this.ttsService.stop();
 		}
