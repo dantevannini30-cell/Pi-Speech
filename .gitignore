@@ -34,6 +34,8 @@ out.jsonl
 pi-*.html
 out.html
 packages/coding-agent/binaries/
+packages/coding-agent/piper-models/
+__pycache__/
 todo.md
 plans/
 .pi/hf-sessions/
