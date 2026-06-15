@@ -16,45 +16,127 @@
 
 ---
 
-# Pi Agent Harness Mono Repo
+# Pi-Speech
 
-This is the home of the pi agent harness project including our self extensible coding agent.
+Fork of [pi-mono](https://github.com/earendil-works/pi-mono) with integrated speech-to-text (STT) and text-to-speech (TTS) for voice-driven coding sessions.
 
-* **[@earendil-works/pi-coding-agent](packages/coding-agent)**: Interactive coding agent CLI
-* **[@earendil-works/pi-agent-core](packages/agent)**: Agent runtime with tool calling and state management
-* **[@earendil-works/pi-ai](packages/ai)**: Unified multi-provider LLM API (OpenAI, Anthropic, Google, …)
+Speak your prompts, hear agent responses read aloud, and keep your hands on the keyboard for what matters.
 
-To learn more about pi:
+## Key additions
 
-* [Visit pi.dev](https://pi.dev), the project website with demos
-* [Read the documentation](https://pi.dev/docs/latest), but you can also ask the agent to explain itself
+### Speech-to-text (STT) via TypeWhisper
 
-## Share your OSS coding agent sessions
+Dictate prompts instead of typing. Press **Ctrl+Space** to start recording, press again to stop, and the transcription is automatically submitted as a prompt.
 
-If you use pi or other coding agents for open source work, please share your sessions.
+- Uses the [TypeWhisper](https://typewhisper.com) macOS app REST API (auto-launches if not running)
+- Supports configurable STT engines (Parakeet, Whisper)
+- Runs raw transcription through a local [Ollama](https://ollama.com) parser to clean up filler words and transcription errors before submission
+- Settings: `sttEnabled`, `sttAutoSubmit`, `sttParserEnabled`
 
-Public OSS session data helps improve coding agents with real-world tasks, tool use, failures, and fixes instead of toy benchmarks.
+### Text-to-speech (TTS) via Piper / Kokoro
 
-For the full explanation, see [this post on X](https://x.com/badlogicgames/status/2037811643774652911).
+Agent responses are spoken aloud as they stream in. A persistent Python worker keeps the TTS model loaded so there is no delay between sentences.
 
-To publish sessions, use [`badlogic/pi-share-hf`](https://github.com/badlogic/pi-share-hf). Read its README.md for setup instructions. All you need is a Hugging Face account, the Hugging Face CLI, and `pi-share-hf`.
+- **Piper TTS** (default) — fast, local, multi-voice. Runs as a persistent Python worker with speed control
+- **Kokoro** — alternative TTS backend with streaming support (see `whisper_bot/tts/kokoro.py`, `tts/streaming_kokoro.py`)
+- **macOS `say` fallback** when Python/Piper is unavailable
+- Adjust playback speed with `/speed 0.5` to `/speed 3.0` (step 0.25)
+- Settings: `ttsEnabled`, `ttsSpeed`
 
-You can also watch [this video](https://x.com/badlogicgames/status/2041151967695634619), where I show how I publish my `pi-mono` sessions.
+### TTS polisher
 
-I regularly publish my own `pi-mono` work sessions here:
+Before speaking, agent output is cleaned up so it sounds natural — no "```python" or "**bold**" read aloud.
 
-- [badlogicgames/pi-mono on Hugging Face](https://huggingface.co/datasets/badlogicgames/pi-mono)
+- Strips thinking/scratchpad tags, code fences, markdown formatting, inline code, file paths, and list markers
+- Purely regex-based (no LLM calls) — fast and deterministic
+- Can optionally use an Ollama model (`qwen2.5:1.5b` by default) for more advanced cleaning
+- Settings: `ttsPolisherEnabled`, `ttsPolisherEndpoint`, `ttsPolisherModel`, `ttsPolisherTimeoutMs`
 
-## All Packages
+### Slash commands
+
+| Command | Description |
+|---------|-------------|
+| `/stt` | STT commands: `on`, `off`, `auto` (toggle auto-submit) |
+| `/tts` | TTS commands: `on`, `off` |
+| `/speed` | Set TTS playback speed: `0.5` – `3.0` (step 0.25) |
+
+### Keybindings
+
+| Shortcut | Action |
+|----------|--------|
+| **Ctrl+Space** | Toggle STT recording (start/stop dictation) |
+
+TTS toggle has no default keybinding — assign one via `app.tts.toggle` in your keybindings config.
+
+### Voice settings
+
+All voice settings are accessible via the settings UI (`/settings`):
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `sttEnabled` | `true` | Enable speech-to-text (requires TypeWhisper) |
+| `ttsEnabled` | `true` | Enable text-to-speech |
+| `sttAutoSubmit` | `true` | Auto-submit transcription when recording stops |
+| `sttParserEnabled` | `true` | Clean STT output through a local Ollama parser |
+| `ttsSpeed` | `1.0` | TTS playback speed (0.5-3.0, step 0.25) |
+| `ttsPolisherEnabled` | `true` | Polish TTS output before speaking |
+| `ttsPolisherEndpoint` | `http://localhost:11434/v1` | Ollama endpoint for TTS polishing |
+| `ttsPolisherModel` | `qwen2.5:1.5b` | Model for TTS polishing |
+| `ttsPolisherTimeoutMs` | `3000` | Per-polish timeout |
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────┐
+│  Pi agent (TypeScript)                        │
+│                                                │
+│  STTService ──▶ TypeWhisperAPI ──▶ macOS app   │
+│       │                                        │
+│       ▼                                        │
+│  ParserProvider (Ollama, cleans transcription) │
+│                                                │
+│  TTSService ──▶ Python worker (Piper/Kokoro)   │
+│       │                        │               │
+│       ▼                        ▼               │
+│  TTSPolisher (regex, then     Audio out        │
+│   optional Ollama polish)                      │
+└──────────────────────────────────────────────┘
+```
+
+## All packages
 
 | Package | Description |
 |---------|-------------|
 | **[@earendil-works/pi-ai](packages/ai)** | Unified multi-provider LLM API (OpenAI, Anthropic, Google, etc.) |
 | **[@earendil-works/pi-agent-core](packages/agent)** | Agent runtime with tool calling and state management |
-| **[@earendil-works/pi-coding-agent](packages/coding-agent)** | Interactive coding agent CLI |
+| **[@earendil-works/pi-coding-agent](packages/coding-agent)** | Interactive coding agent CLI (with STT/TTS integration) |
 | **[@earendil-works/pi-tui](packages/tui)** | Terminal UI library with differential rendering |
+| **whisper_bot** | Python TTS workers (Piper, Kokoro) and supporting modules |
 
-For Slack/chat automation and workflows see [earendil-works/pi-chat](https://github.com/earendil-works/pi-chat).
+The Python TTS workers live in `packages/coding-agent/whisper_bot/tts/`:
+- `piper.py` — Piper TTS with speed control and multi-voice support
+- `kokoro.py` — Kokoro TTS backend
+- `streaming_kokoro.py` — Streaming Kokoro for low-latency playback
+- `sentence_splitter.py` — Smart sentence segmentation for TTS
+- `tts_worker.py` — Persistent worker process (JSONL protocol on stdin/stdout)
+- `tts_cli.py` — Standalone TTS CLI
+- `tts_streaming_cli.py` — Standalone streaming TTS CLI
+
+## Prerequisites
+
+- **STT**: [TypeWhisper](https://typewhisper.com) macOS app
+- **TTS**: Python 3, [Piper TTS](https://github.com/rhasspy/piper) or Kokoro, or macOS `say`
+- **Parser/Polisher (optional)**: [Ollama](https://ollama.com) running locally for advanced transcription cleaning and TTS polishing
+
+## Quick start
+
+```bash
+npm install --ignore-scripts
+npm run build
+./pi-test.sh              # Run from source
+```
+
+Once running, press **Ctrl+Space** to start dictating, or enable TTS with `/tts on`.
 
 ## Permissions & Containerization
 
