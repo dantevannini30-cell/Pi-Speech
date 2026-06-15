@@ -15,10 +15,10 @@
  * until ready (matching the behavior in whisper-bot's Python code).
  */
 
-import * as fs from "node:fs";
-import * as path from "node:path";
-import * as os from "node:os";
 import { spawn } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 
 // ---------------------------------------------------------------------------
 // Discovery
@@ -55,9 +55,7 @@ function discover(): { port: number; token?: string } {
 				_discoveredToken = data.token;
 				return { port: data.port, token: data.token };
 			}
-		} catch {
-			continue;
-		}
+		} catch {}
 	}
 
 	_discoveredPort = DEFAULT_PORT;
@@ -208,7 +206,7 @@ export class TypeWhisperAPI {
 
 	/**
 	 * Start a dictation session (push-to-talk). Returns the session UUID.
-	 * 
+	 *
 	 * If TypeWhisper responds with 409 "Already recording", we treat that
 	 * as a success and still return the existing session ID if available.
 	 */
@@ -233,10 +231,7 @@ export class TypeWhisperAPI {
 
 		if (!res.ok) {
 			const text = await res.text();
-			throw new TypeWhisperError(
-				`TypeWhisper /dictation/start failed: ${res.status} ${text}`,
-				res.status,
-			);
+			throw new TypeWhisperError(`TypeWhisper /dictation/start failed: ${res.status} ${text}`, res.status);
 		}
 
 		const data = (await res.json()) as { id: string };
@@ -277,10 +272,7 @@ export class TypeWhisperAPI {
 		const data = (await res.json()) as Record<string, unknown>;
 
 		// TypeWhisper may return the text at different paths depending on version
-		const text =
-			(data.text as string) ??
-			((data.transcription as Record<string, unknown>)?.text as string) ??
-			"";
+		const text = (data.text as string) ?? ((data.transcription as Record<string, unknown>)?.text as string) ?? "";
 		return text;
 	}
 
@@ -308,10 +300,7 @@ export class TypeWhisperAPI {
 			headers: this.headers,
 		});
 		if (!res.ok) {
-			throw new TypeWhisperError(
-				`TypeWhisper /models failed: ${res.status} ${await res.text()}`,
-				res.status,
-			);
+			throw new TypeWhisperError(`TypeWhisper /models failed: ${res.status} ${await res.text()}`, res.status);
 		}
 		const data = (await res.json()) as ModelInfo[];
 		return data;

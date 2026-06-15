@@ -21,7 +21,22 @@ if _CODING_AGENT_DIR not in sys.path:
 import argparse
 import asyncio
 from whisper_bot.config import load_config
-from whisper_bot.tts.piper import PiperTTS
+from whisper_bot.events import PipelineError
+
+
+class _NoOpEventBus:
+	"""Stand-in event bus that tracks PipelineErrors."""
+
+	def __init__(self):
+		self._errors: list[str] = []
+
+	async def emit(self, event: object) -> None:
+		if isinstance(event, PipelineError):
+			self._errors.append(event.message)
+
+	@property
+	def has_errors(self) -> bool:
+		return len(self._errors) > 0
 
 
 async def main() -> None:
@@ -40,14 +55,19 @@ async def main() -> None:
     config["tts"]["provider"] = args.provider
     config["tts"]["streaming"] = False  # one-shot mode
 
+    bus = _NoOpEventBus()
+
     if args.provider == "piper":
         from whisper_bot.tts.piper import PiperTTS
-        tts = PiperTTS(config, None)  # no event bus needed for standalone
+        tts = PiperTTS(config, bus)
     else:
         from whisper_bot.tts.kokoro import KokoroTTS
-        tts = KokoroTTS(config, None)
+        tts = KokoroTTS(config, bus)
 
     await tts.speak(args.text)
+
+    if bus.has_errors:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

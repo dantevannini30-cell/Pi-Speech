@@ -87,6 +87,7 @@ import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
+import { STTService, type STTState, TTSService, type TTSState } from "../../services/index.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
@@ -96,7 +97,6 @@ import { getPiUserAgent } from "../../utils/pi-user-agent.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { ensureTool } from "../../utils/tools-manager.ts";
 import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
-import { STTService, TTSService, type STTState, type TTSState } from "../../services/index.ts";
 import { ArminComponent } from "./components/armin.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
@@ -2729,7 +2729,11 @@ export class InteractiveMode {
 					this.settingsManager.setSttEnabled(true);
 					this.sttService.setEnabled(true);
 					this.showMessage("STT enabled");
-				} else if (arg === "off" || arg === "disable" || (arg === "toggle" && this.settingsManager.getSttEnabled())) {
+				} else if (
+					arg === "off" ||
+					arg === "disable" ||
+					(arg === "toggle" && this.settingsManager.getSttEnabled())
+				) {
 					this.settingsManager.setSttEnabled(false);
 					this.sttService.setEnabled(false);
 					this.sttService.abort();
@@ -2748,7 +2752,11 @@ export class InteractiveMode {
 					this.settingsManager.setTtsEnabled(true);
 					this.ttsService.setEnabled(true);
 					this.showMessage("TTS enabled");
-				} else if (arg === "off" || arg === "disable" || (arg === "toggle" && this.settingsManager.getTtsEnabled())) {
+				} else if (
+					arg === "off" ||
+					arg === "disable" ||
+					(arg === "toggle" && this.settingsManager.getTtsEnabled())
+				) {
 					this.settingsManager.setTtsEnabled(false);
 					this.ttsService.setEnabled(false);
 					this.showMessage("TTS disabled");

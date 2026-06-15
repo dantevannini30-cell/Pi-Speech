@@ -10,7 +10,7 @@
  *   - tts_streaming_cli.py — streaming TTS (sentences via stdin)
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,7 +25,7 @@ function getWhisperBotDir(): string {
 	const __dirname = path.dirname(__filename);
 	// We're in packages/coding-agent/dist/services/tts.js
 	// The whisper-bot dir is at packages/coding-agent/whisper-bot/
-	return path.resolve(__dirname, "../../whisper-bot");
+	return path.resolve(__dirname, "../../whisper_bot");
 }
 
 // ---------------------------------------------------------------------------
@@ -139,10 +139,18 @@ export class TTSService {
 	 */
 	stop(): void {
 		for (const proc of this.childProcesses) {
-			try { proc.kill("SIGTERM"); } catch { /* ignore */ }
+			try {
+				proc.kill("SIGTERM");
+			} catch {
+				/* ignore */
+			}
 		}
 		if (this.currentProcess) {
-			try { this.currentProcess.kill("SIGTERM"); } catch { /* ignore */ }
+			try {
+				this.currentProcess.kill("SIGTERM");
+			} catch {
+				/* ignore */
+			}
 		}
 		this.currentProcess = null;
 		this.childProcesses = [];
@@ -176,15 +184,11 @@ export class TTSService {
 	 * Speak text via the Python one-shot CLI.
 	 */
 	private async executePythonOneShot(text: string): Promise<void> {
-		return new Promise((resolve) => {
+		return new Promise((resolve, reject) => {
 			this.setState("speaking");
 			this.callbacks.onSentenceStart?.(text);
 
-			const args = [
-				path.join(this.whisperBotDir, "tts_cli.py"),
-				"--text", text,
-				"--provider", this.provider,
-			];
+			const args = [path.join(this.whisperBotDir, "tts_cli.py"), "--text", text, "--provider", this.provider];
 			if (this.config.voice) {
 				args.push("--voice", this.config.voice);
 			}
@@ -199,13 +203,17 @@ export class TTSService {
 			proc.on("error", (err) => {
 				this.callbacks.onError?.(err);
 				this.cleanupProcess(proc);
-				resolve();
+				reject(err);
 			});
 
-			proc.on("close", () => {
+			proc.on("close", (code) => {
 				this.cleanupProcess(proc);
 				this.callbacks.onSentenceEnd?.(text);
-				resolve();
+				if (code !== 0) {
+					reject(new Error(`Python TTS exited with code ${code}`));
+				} else {
+					resolve();
+				}
 			});
 		});
 	}
@@ -215,14 +223,11 @@ export class TTSService {
 	 * The streaming CLI reads sentences from stdin, one per line.
 	 */
 	private async executePythonStreaming(sentence: string): Promise<void> {
-		return new Promise((resolve) => {
+		return new Promise((resolve, reject) => {
 			this.setState("speaking");
 			this.callbacks.onSentenceStart?.(sentence);
 
-			const args = [
-				path.join(this.whisperBotDir, "tts_streaming_cli.py"),
-				"--provider", this.provider,
-			];
+			const args = [path.join(this.whisperBotDir, "tts_streaming_cli.py"), "--provider", this.provider];
 			if (this.config.voice) {
 				args.push("--voice", this.config.voice);
 			}
@@ -241,13 +246,17 @@ export class TTSService {
 			proc.on("error", (err) => {
 				this.callbacks.onError?.(err);
 				this.cleanupProcess(proc);
-				resolve();
+				reject(err);
 			});
 
-			proc.on("close", () => {
+			proc.on("close", (code) => {
 				this.cleanupProcess(proc);
 				this.callbacks.onSentenceEnd?.(sentence);
-				resolve();
+				if (code !== 0) {
+					reject(new Error(`Python TTS exited with code ${code}`));
+				} else {
+					resolve();
+				}
 			});
 		});
 	}
@@ -293,9 +302,6 @@ export class TTSService {
 	 * Streaming mode uses the stdin-based CLI; one-shot uses the --text CLI.
 	 */
 	private async executeWithFallback(text: string, streaming: boolean): Promise<void> {
-		const cliName = streaming ? "tts_streaming_cli.py" : "tts_cli.py";
-		const cliPath = path.join(this.whisperBotDir, cliName);
-
 		// Try Python first
 		try {
 			if (streaming) {

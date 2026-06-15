@@ -23,6 +23,22 @@ if _CODING_AGENT_DIR not in sys.path:
 import asyncio
 import argparse
 from whisper_bot.config import load_config
+from whisper_bot.events import PipelineError
+
+
+class _NoOpEventBus:
+	"""Stand-in event bus that tracks PipelineErrors."""
+
+	def __init__(self):
+		self._errors: list[str] = []
+
+	async def emit(self, event: object) -> None:
+		if isinstance(event, PipelineError):
+			self._errors.append(event.message)
+
+	@property
+	def has_errors(self) -> bool:
+		return len(self._errors) > 0
 
 
 async def main() -> None:
@@ -39,12 +55,14 @@ async def main() -> None:
     config["tts"]["streaming"] = True
     config["tts"]["pool_size"] = args.pool_size
 
+    bus = _NoOpEventBus()
+
     if args.provider == "piper":
         from whisper_bot.tts.piper import StreamingPiperTTS
-        tts = StreamingPiperTTS(config, None)
+        tts = StreamingPiperTTS(config, bus)
     else:
         from whisper_bot.tts.streaming_kokoro import StreamingKokoroTTS
-        tts = StreamingKokoroTTS(config, None)
+        tts = StreamingKokoroTTS(config, bus)
 
     # Warm up the TTS engine (pre-load models, launch workers)
     await tts.warmup()
@@ -56,6 +74,9 @@ async def main() -> None:
                 await tts.speak_sentence(sentence)
     finally:
         await tts.wait()
+
+    if bus.has_errors:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
