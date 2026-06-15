@@ -99,6 +99,45 @@ Then just talk to pi. By default, pi gives the model four tools: `read`, `write`
 
 ---
 
+## TTS Setup (Pi-Speech)
+
+Pi-Speech supports local text-to-speech (TTS) using Piper and Kokoro through
+a Python worker process.
+
+### Virtual Environment
+
+Create a Python 3.11 virtual environment and install dependencies:
+
+```bash
+cd packages/coding-agent
+python3.11 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+### Model Files
+
+**Piper:** Download `.onnx` model files from
+[huggingface.co/rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices)
+and place them in `packages/coding-agent/piper-models/`.
+
+Common voices:
+- `en_US-lessac-medium` (small, fast)
+- `en_US-lessac-high` (higher quality)
+
+**Kokoro:** Models are downloaded automatically from Hugging Face on first use.
+Available voices include `af_bella`, `am_adam`, `bf_emma`, and more.
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `/tts on` / `/tts off` | Toggle TTS |
+| `/tts model` | Open voice selector |
+| `/speed <0.5-3.0>` | Set playback speed |
+
+The voice selector shows both Piper and Kokoro voices. Selecting a voice
+automatically sets the correct provider.
+
 ## Providers & Models
 
 For each built-in provider, pi maintains a list of tool-capable models, updated with every release. Authenticate via subscription (`/login`) or API key, then select any model from that provider via `/model` (or Ctrl+L).
