@@ -459,7 +459,12 @@ export class InteractiveMode {
 			},
 		);
 		this.ttsService = new TTSService(
-			{ enabled: ttsEnabled, provider: "piper", voice: "en_US-lessac-medium" },
+			{
+				enabled: ttsEnabled,
+				provider: "piper",
+				voice: "en_US-lessac-medium",
+				speed: this.settingsManager.getTtsSpeed(),
+			},
 			{
 				onStateChange: (state) => {
 					this.ttsState = state;
@@ -2763,6 +2768,24 @@ export class InteractiveMode {
 					this.ttsService.setEnabled(false);
 					this.showMessage("TTS disabled");
 				}
+				return;
+			}
+			if (text === "/speed" || text.startsWith("/speed ")) {
+				const arg = text.startsWith("/speed ") ? text.slice(7).trim() : "";
+				this.editor.setText("");
+				if (!arg) {
+					this.showMessage(`TTS speed: ${this.ttsService.speed}x`);
+					return;
+				}
+				const speed = parseFloat(arg);
+				if (isNaN(speed) || speed < 0.5 || speed > 3.0) {
+					this.showMessage("Speed must be between 0.5 and 3.0");
+					return;
+				}
+				const rounded = Math.round(speed / 0.25) * 0.25;
+				this.settingsManager.setTtsSpeed(rounded);
+				this.ttsService.setSpeed(rounded);
+				this.showMessage(`TTS speed set to ${rounded}x`);
 				return;
 			}
 
@@ -5655,6 +5678,7 @@ export class InteractiveMode {
 | \`${ttsToggle}\` | Toggle TTS (text-to-speech) on/off |
 | \`/stt\` | STT commands: \`/stt on\`, \`/stt off\`, \`/stt auto\` |
 | \`/tts\` | TTS commands: \`/tts on\`, \`/tts off\` |
+| \`/speed\` | Set TTS playback speed: \`/speed\` (show), \`/speed 2\` (0.5-3.0, step 0.25) |
 `;
 
 		// Add extension-registered shortcuts

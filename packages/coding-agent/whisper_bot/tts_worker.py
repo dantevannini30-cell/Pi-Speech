@@ -3,7 +3,7 @@
 Persistent TTS worker — keeps PiperVoice loaded and listens for JSONL on stdin.
 
 Protocol (JSONL stdin/stdout):
-  -> {"type":"speak","text":"..."}
+  -> {"type":"speak","text":"...","speed":1.0}
   <- {"type":"done","text":"..."}       (playback complete)
   <- {"type":"error","message":"..."}   (TTS failed)
   -> {"type":"shutdown"}
@@ -13,7 +13,7 @@ Usage:
   python3 tts_worker.py [--provider piper] [--voice en_US-lessac-medium]
 """
 
-import sys, os, json, struct
+import sys, os, json
 
 # Add coding-agent to path so whisper_bot is importable
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -22,6 +22,7 @@ if _CODING_AGENT_DIR not in sys.path:
     sys.path.insert(0, _CODING_AGENT_DIR)
 
 import argparse
+import numpy as np
 from whisper_bot.config import load_config
 
 
@@ -30,30 +31,17 @@ def _emit(msg: dict) -> None:
     sys.stdout.flush()
 
 
-def _speak_piper(text: str, model_path: str) -> None:
-    """Generate and play audio using PiperVoice directly (no CLI subprocess)."""
-    import sounddevice as sd
-    import numpy as np
-    from piper.voice import PiperVoice
-
-    voice = PiperVoice.load(model_path)
-    sr = voice.config.sample_rate
-
-    chunks = []
-    for chunk in voice.synthesize(text):
-        chunks.append(chunk.audio_float_array)
-
-    if not chunks:
-        return
-
-    audio = np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
-
-    # Play via sounddevice
-    stream = sd.OutputStream(samplerate=sr, channels=1, blocksize=0)
-    stream.start()
-    stream.write(audio.astype(np.float32))
-    stream.stop()
-    stream.close()
+def _resample(audio: np.ndarray, speed: float) -> np.ndarray:
+    """Resample audio array for playback speed change (tape-recorder style)."""
+    if speed == 1.0 or len(audio) == 0:
+        return audio
+    n_orig = len(audio)
+    n_new = max(1, int(n_orig / speed))
+    indices = np.linspace(0, n_orig - 1, n_new)
+    floor_idx = np.floor(indices).astype(int)
+    ceil_idx = np.minimum(floor_idx + 1, n_orig - 1)
+    frac = indices - floor_idx
+    return audio[floor_idx] * (1.0 - frac) + audio[ceil_idx] * frac
 
 
 def main() -> None:
@@ -98,6 +86,7 @@ def main() -> None:
             continue
 
         msg_type = msg.get("type")
+        speed = msg.get("speed", 1.0)
 
         if msg_type == "shutdown":
             break
@@ -111,7 +100,6 @@ def main() -> None:
             try:
                 if args.provider == "piper" and voice is not None:
                     import sounddevice as sd
-                    import numpy as np
 
                     sr = voice.config.sample_rate
                     chunks = []
@@ -120,6 +108,7 @@ def main() -> None:
 
                     if chunks:
                         audio = np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
+                        audio = _resample(audio, speed)
                         stream = sd.OutputStream(samplerate=sr, channels=1, blocksize=0)
                         stream.start()
                         stream.write(audio.astype(np.float32))
@@ -137,6 +126,8 @@ def main() -> None:
                             if isinstance(ev, PipelineError):
                                 _emit({"type": "error", "message": ev.message})
 
+                    # Pass speed through config so KokoroTTS can apply it
+                    config["tts"]["speed"] = speed
                     import asyncio
                     tts = KokoroTTS(config, _Bus())
                     asyncio.run(tts.speak(text))
@@ -145,7 +136,14 @@ def main() -> None:
                 else:
                     # Fallback: macOS say
                     import subprocess
-                    subprocess.run(["say", text], check=True)
+                    cmd = ["say"]
+                    if speed != 1.0:
+                        # Map speed multiplier to words-per-minute rate.
+                        # Default macOS say rate is ~200 wpm, so scale that.
+                        base_rate = 200
+                        cmd += ["-r", str(int(base_rate * speed))]
+                    cmd.append(text)
+                    subprocess.run(cmd, check=True)
                     _emit({"type": "done", "text": text})
 
             except Exception as e:

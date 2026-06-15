@@ -32,7 +32,7 @@ from whisper_bot.tts import TTSProvider
 # Pipelined subprocess script — runs for the lifetime of each worker
 # ---------------------------------------------------------------------------
 
-def _build_pipelined_script() -> str:
+def _build_pipelined_script(speed: float = 1.0) -> str:
     """Build the inline script for one Kokoro worker subprocess.
 
     The script speaks a two-phase protocol:
@@ -152,6 +152,7 @@ for _line in sys.stdin:
 
         _audio = _pending_audio
         _pending_audio = None
+        _play_speed = _pending_speed
 
         if len(_audio) == 0:
             _debug(f"No audio for seq={_seq}, skipping playback")
@@ -159,12 +160,12 @@ for _line in sys.stdin:
             continue
 
         _debug(f"Playing {len(_audio)} samples for seq={_seq}")
-        _play(_audio)
+        _play(_audio, spd=_play_speed)
         _debug(f"Playback complete for seq={_seq}")
         print(json.dumps({"type": "done", "seq": _seq}), flush=True)
 
 _debug("Kokoro subprocess exiting")
-"""
+'''
 
 
 # ---------------------------------------------------------------------------
@@ -504,7 +505,7 @@ class StreamingKokoroTTS(TTSProvider):
 
     async def _spawn_worker(self, idx: int) -> None:
         """Spawn one persistent Kokoro subprocess worker."""
-        script = _build_pipelined_script()
+        script = _build_pipelined_script(speed=self._speed)
         _debug(f"[DEBUG streaming_tts] Spawning worker {idx} (script={len(script)} chars)")
 
         env = None

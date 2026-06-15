@@ -38,14 +38,14 @@ from whisper_bot.tts import TTSProvider
 # ---------------------------------------------------------------------------
 
 
-def _build_pipelined_script(model_path: str) -> str:
+def _build_pipelined_script(model_path: str, speed: float = 1.0) -> str:
     """Build the inline script for one Piper worker subprocess.
 
     The script uses ``piper.voice.PiperVoice`` directly (no CLI subprocess)
     and speaks a two-phase protocol identical to ``StreamingKokoroTTS`` workers:
 
     **Input (stdin, JSONL):**
-    - ``{"type":"speak","seq":0,"text":"..."}``
+    - ``{"type":"speak","seq":0,"text":"...","speed":1.0}``
       → generate audio for this sentence, store it, reply ``ready``
     - ``{"type":"play","seq":0}``
       → play the stored audio, reply ``done``
@@ -69,6 +69,7 @@ def _debug(msg):
         print(msg, file=sys.stderr, flush=True)
 
 _MODEL_PATH = '{safe_path}'
+_DEFAULT_SPEED = {speed}
 
 try:
     import sounddevice as _sd
@@ -78,7 +79,19 @@ except ImportError:
     import soundfile as _sf
     _debug("sounddevice not available, using soundfile+afplay")
 
-def _play(audio, sr=22050):
+def _resample(audio, spd):
+    if spd == 1.0 or len(audio) == 0:
+        return audio
+    _n_orig = len(audio)
+    _n_new = max(1, int(_n_orig / spd))
+    _idx = np.linspace(0, _n_orig - 1, _n_new)
+    _fl = np.floor(_idx).astype(int)
+    _cl = np.minimum(_fl + 1, _n_orig - 1)
+    _fr = _idx - _fl
+    return audio[_fl] * (1.0 - _fr) + audio[_cl] * _fr
+
+def _play(audio, sr=22050, spd=1.0):
+    audio = _resample(audio, spd)
     if _HAS_SD:
         _stream = _sd.OutputStream(samplerate=sr, channels=1, blocksize=0)
         _stream.start()
@@ -109,6 +122,7 @@ _debug("Piper subprocess ready")
 
 _pending_audio = None
 _pending_seq = -1
+_pending_speed = _DEFAULT_SPEED
 
 for _line in sys.stdin:
     _line = _line.strip()
@@ -129,6 +143,7 @@ for _line in sys.stdin:
         _text = _msg.get("text", "")
         _seq = _msg.get("seq", -1)
         _pending_seq = _seq
+        _pending_speed = _msg.get("speed", _DEFAULT_SPEED)
 
         if not _text.strip():
             _pending_audio = np.array([], dtype=np.float32)
@@ -163,13 +178,14 @@ for _line in sys.stdin:
 
         _audio = _pending_audio
         _pending_audio = None
+        _play_speed = _pending_speed
 
         if len(_audio) == 0:
             print(json.dumps({{"type": "done", "seq": _seq}}), flush=True)
             continue
 
         _debug(f"Playing {{len(_audio)}} samples for seq={{_seq}}")
-        _play(_audio, _SR)
+        _play(_audio, _SR, _play_speed)
         print(json.dumps({{"type": "done", "seq": _seq}}), flush=True)
 
 _debug("Piper subprocess exiting")
@@ -194,9 +210,11 @@ class PiperTTS(TTSProvider):
         self._enabled: bool = tts_cfg.get("enabled", True)
         self._event_bus = event_bus
         self._model_path = _resolve_model_path(config)
+        self._speed: float = tts_cfg.get("speed", 1.0)
         _debug(
             f"[DEBUG piper] PiperTTS initialized:"
             f" enabled={self._enabled}"
+            f" speed={self._speed}"
             f" model={self._model_path}"
         )
 
@@ -244,6 +262,15 @@ class PiperTTS(TTSProvider):
             import numpy as np
 
             audio = np.frombuffer(stdout, dtype=np.int16).astype(np.float32) / 32768.0
+            # Apply speed via resampling
+            if self._speed != 1.0 and len(audio) > 0:
+                n_orig = len(audio)
+                n_new = max(1, int(n_orig / self._speed))
+                indices = np.linspace(0, n_orig - 1, n_new)
+                floor_idx = np.floor(indices).astype(int)
+                ceil_idx = np.minimum(floor_idx + 1, n_orig - 1)
+                frac = indices - floor_idx
+                audio = audio[floor_idx] * (1.0 - frac) + audio[ceil_idx] * frac
             sd.play(audio, 22050)
             sd.wait()
             return True
@@ -291,6 +318,7 @@ class StreamingPiperTTS(TTSProvider):
         self._enabled: bool = config.get("tts", {}).get("enabled", True)
         self._pool_size: int = config.get("tts", {}).get("pool_size", 2)
         self._model_path = _resolve_model_path(config)
+        self._speed: float = config.get("tts", {}).get("speed", 1.0)
         self._event_bus = event_bus
 
         # Queue of pending sentences + sentinel
@@ -617,7 +645,7 @@ class StreamingPiperTTS(TTSProvider):
             }
             return
 
-        script = _build_pipelined_script(self._model_path)
+        script = _build_pipelined_script(self._model_path, speed=self._speed)
         _debug(
             f"[DEBUG streaming_piper] Spawning worker {idx}"
             f" (script={len(script)} chars)"
@@ -734,11 +762,11 @@ class StreamingPiperTTS(TTSProvider):
             return
 
         payload = (
-            json.dumps({"type": "speak", "seq": seq, "text": text}) + "\n"
+            json.dumps({"type": "speak", "seq": seq, "text": text, "speed": self._speed}) + "\n"
         )
         _debug(
             f"[DEBUG streaming_piper] -> Worker {worker_idx}: speak seq={seq}"
-            f" ({len(text)} chars)"
+            f" ({len(text)} chars, speed={self._speed})"
         )
         proc.stdin.write(payload.encode("utf-8"))
         await proc.stdin.drain()

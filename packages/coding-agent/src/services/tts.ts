@@ -34,6 +34,7 @@ export interface TTSServiceConfig {
 	enabled: boolean;
 	provider?: "piper" | "kokoro";
 	voice?: string;
+	speed?: number; // playback speed, 0.5-3.0, step 0.25, default 1.0
 }
 
 export type TTSState = "idle" | "speaking";
@@ -90,6 +91,14 @@ export class TTSService {
 
 	setVoice(voice: string): void {
 		this.config.voice = voice;
+	}
+
+	get speed(): number {
+		return this.config.speed ?? 1.0;
+	}
+
+	setSpeed(speed: number): void {
+		this.config.speed = Math.max(0.5, Math.min(3.0, Math.round(speed / 0.25) * 0.25));
 	}
 
 	/**
@@ -201,7 +210,7 @@ export class TTSService {
 			this.setState("speaking");
 			this.callbacks.onSentenceStart?.(text);
 
-			const msg = JSON.stringify({ type: "speak", text }) + "\n";
+			const msg = JSON.stringify({ type: "speak", text, speed: this.speed }) + "\n";
 			this.worker.stdin?.write(msg);
 		});
 	}

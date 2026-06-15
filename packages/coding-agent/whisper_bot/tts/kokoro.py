@@ -29,8 +29,9 @@ class KokoroTTS(TTSProvider):
         tts_cfg = config.get("tts", {})
         self._voice: str = tts_cfg.get("voice", "af_heart")
         self._enabled: bool = tts_cfg.get("enabled", True)
+        self._speed: float = tts_cfg.get("speed", 1.0)
         self._event_bus = event_bus
-        _debug(f"[DEBUG tts] KokoroTTS initialized: voice={self._voice} enabled={self._enabled}")
+        _debug(f"[DEBUG tts] KokoroTTS initialized: voice={self._voice} enabled={self._enabled} speed={self._speed}")
 
     # ------------------------------------------------------------------
     # Public API
@@ -73,7 +74,7 @@ class KokoroTTS(TTSProvider):
         Returns ``True`` on success, ``False`` on failure (and emits
         ``PipelineError``).
         """
-        return await _run_kokoro_process(text, self._voice, self._event_bus)
+        return await _run_kokoro_process(text, self._voice, self._event_bus, speed=self._speed)
 
 
 # ------------------------------------------------------------------
@@ -81,13 +82,13 @@ class KokoroTTS(TTSProvider):
 # ------------------------------------------------------------------
 
 
-async def _run_kokoro_process(text: str, voice: str, event_bus: EventBus) -> bool:
+async def _run_kokoro_process(text: str, voice: str, event_bus: EventBus, speed: float = 1.0) -> bool:
     """Run the Kokoro inline script as a subprocess.
 
     Returns ``True`` on success, ``False`` on failure (and emits
     ``PipelineError``).
     """
-    kokoro_script = _build_kokoro_script(voice)
+    kokoro_script = _build_kokoro_script(voice, speed=speed)
 
     _debug(f"[DEBUG tts] Spawning subprocess: {sys.executable} -c <inline script>")
     _debug(f"[DEBUG tts] Inline script length: {len(kokoro_script)} chars")
@@ -131,7 +132,7 @@ async def _run_kokoro_process(text: str, voice: str, event_bus: EventBus) -> boo
     return True
 
 
-def _build_kokoro_script(voice: str) -> str:
+def _build_kokoro_script(voice: str, speed: float = 1.0) -> str:
     """Build the inline Python script the subprocess will run."""
     # Language code derived from voice prefix, defaulting to American English.
     # Kokoro voice names often start with af_ (American Female), am_
@@ -205,6 +206,18 @@ full_audio = (
 )
 _debug(f"[DEBUG tts subproc] Full audio: {{len(full_audio)}} samples")
 sr = 24000  # Kokoro default sample rate
+
+# ---- Speed change (resample) ----------------------------------------------
+_speed = {speed}
+if _speed != 1.0 and len(full_audio) > 0:
+    _n_orig = len(full_audio)
+    _n_new = max(1, int(_n_orig / _speed))
+    _indices = np.linspace(0, _n_orig - 1, _n_new)
+    _floor = np.floor(_indices).astype(int)
+    _ceil = np.minimum(_floor + 1, _n_orig - 1)
+    _frac = _indices - _floor
+    full_audio = full_audio[_floor] * (1.0 - _frac) + full_audio[_ceil] * _frac
+    _debug(f"[DEBUG tts subproc] Resampled to {{len(full_audio)}} samples (speed={{_speed}})")
 
 # ---- Playback -------------------------------------------------------------
 # Prefer sounddevice (direct), fall back to soundfile + afplay (macOS).

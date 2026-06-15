@@ -116,6 +116,7 @@ export interface Settings {
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
 	sttEnabled?: boolean; // default: true - enable speech-to-text (requires TypeWhisper)
 	ttsEnabled?: boolean; // default: true - enable text-to-speech
+	ttsSpeed?: number; // default: 1.0, range: 0.5-3.0, step: 0.25
 	sttAutoSubmit?: boolean; // default: true - auto-submit STT transcription when recording stops
 	markdown?: MarkdownSettings;
 	warnings?: WarningSettings;
@@ -1205,6 +1206,18 @@ export class SettingsManager {
 	setTtsEnabled(enabled: boolean): void {
 		this.globalSettings.ttsEnabled = enabled;
 		this.markModified("ttsEnabled");
+		this.save();
+	}
+
+	getTtsSpeed(): number {
+		const speed = this.settings.ttsSpeed;
+		if (speed === undefined || speed === null) return 1.0;
+		return Math.max(0.5, Math.min(3.0, Math.round(speed / 0.25) * 0.25));
+	}
+
+	setTtsSpeed(speed: number): void {
+		this.globalSettings.ttsSpeed = Math.max(0.5, Math.min(3.0, Math.round(speed / 0.25) * 0.25));
+		this.markModified("ttsSpeed");
 		this.save();
 	}
 
