@@ -30,7 +30,9 @@ Dictate prompts instead of typing. Press **Ctrl+Space** to start recording, pres
 
 - Uses the [TypeWhisper](https://typewhisper.com) macOS app REST API (auto-launches if not running)
 - Supports configurable STT engines (Parakeet, Whisper)
-- Runs raw transcription through a local [Ollama](https://ollama.com) parser to clean up filler words and transcription errors before submission
+- Runs raw transcription through a multi-stage parser:
+  1. **Regex pass (always)**: removes filler words (um, uh, you know), resolves self-corrections ("wait no", "scratch that"), fixes homophones (their/they're, its/it's, to/too), normalizes punctuation and sentence casing
+  2. **T5 grammar correction (optional)**: Google's T5 architecture via [Transformers.js](https://huggingface.co/rabden/t5-tiny-gec-hone) (~11MB quantized ONNX, ~30-115ms on CPU). Runs locally, no external API calls. Gracefully degrades if unavailable.
 - Settings: `sttEnabled`, `sttAutoSubmit`, `sttParserEnabled`
 
 ### Text-to-speech (TTS) via Piper / Kokoro
@@ -48,9 +50,9 @@ Agent responses are spoken aloud as they stream in. A persistent Python worker k
 Before speaking, agent output is cleaned up so it sounds natural — no "```python" or "**bold**" read aloud.
 
 - Strips thinking/scratchpad tags, code fences, markdown formatting, inline code, file paths, and list markers
-- Purely regex-based (no LLM calls) — fast and deterministic
-- Can optionally use an Ollama model (`qwen2.5:1.5b` by default) for more advanced cleaning
-- Settings: `ttsPolisherEnabled`, `ttsPolisherEndpoint`, `ttsPolisherModel`, `ttsPolisherTimeoutMs`
+- Purely regex-based (no LLM calls) — fast, deterministic, zero network calls
+- Humanizes identifiers: `snake_case`, `kebab-case`, `camelCase` and file paths are converted to natural speech
+- Settings: `ttsPolisherEnabled`
 
 ### Slash commands
 
@@ -77,30 +79,29 @@ All voice settings are accessible via the settings UI (`/settings`):
 | `sttEnabled` | `true` | Enable speech-to-text (requires TypeWhisper) |
 | `ttsEnabled` | `true` | Enable text-to-speech |
 | `sttAutoSubmit` | `true` | Auto-submit transcription when recording stops |
-| `sttParserEnabled` | `true` | Clean STT output through a local Ollama parser |
+| `sttParserEnabled` | `true` | Clean STT output (regex + T5 grammar correction) |
 | `ttsSpeed` | `1.0` | TTS playback speed (0.5-3.0, step 0.25) |
-| `ttsPolisherEnabled` | `true` | Polish TTS output before speaking |
-| `ttsPolisherEndpoint` | `http://localhost:11434/v1` | Ollama endpoint for TTS polishing |
-| `ttsPolisherModel` | `qwen2.5:1.5b` | Model for TTS polishing |
-| `ttsPolisherTimeoutMs` | `3000` | Per-polish timeout |
+| `ttsPolisherEnabled` | `true` | Polish TTS output before speaking (regex-based) |
 
 ### Architecture
 
 ```
-┌──────────────────────────────────────────────┐
-│  Pi agent (TypeScript)                        │
-│                                                │
-│  STTService ──▶ TypeWhisperAPI ──▶ macOS app   │
-│       │                                        │
-│       ▼                                        │
-│  ParserProvider (Ollama, cleans transcription) │
-│                                                │
-│  TTSService ──▶ Python worker (Piper/Kokoro)   │
-│       │                        │               │
-│       ▼                        ▼               │
-│  TTSPolisher (regex, then     Audio out        │
-│   optional Ollama polish)                      │
-└──────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│  Pi agent (TypeScript)                               │
+│                                                       │
+│  STTService ──▶ TypeWhisperAPI ──▶ TypeWhisper macOS  │
+│       │                                                │
+│       ▼                                                │
+│  OllamaParser (class name only — actually uses)        │
+│     ├─ 1. Regex pass (fillers, corrections, homophones)│
+│     └─ 2. T5 grammar correction (rabden/t5-tiny-gec,   │
+│             Transformers.js/ONNX, no API calls)          │
+│                                                         │
+│  TTSService ──▶ Python worker (Piper/Kokoro) ──▶ Audio  │
+│       │                                                  │
+│       ▼                                                  │
+│  RegexTTSPolisher (no LLM, no network)                   │
+└─────────────────────────────────────────────────────┘
 ```
 
 ## All packages
@@ -126,7 +127,8 @@ The Python TTS workers live in `packages/coding-agent/whisper_bot/tts/`:
 
 - **STT**: [TypeWhisper](https://typewhisper.com) macOS app
 - **TTS**: Python 3, [Piper TTS](https://github.com/rhasspy/piper) or Kokoro, or macOS `say`
-- **Parser/Polisher (optional)**: [Ollama](https://ollama.com) running locally for advanced transcription cleaning and TTS polishing
+- **STT parser**: No external services needed — the T5 grammar correction model (~11MB) is downloaded on first use and cached via HuggingFace
+- **TTS polisher**: Zero dependencies — purely regex-based
 
 ## Quick start
 

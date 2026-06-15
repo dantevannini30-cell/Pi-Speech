@@ -1,5 +1,69 @@
 # Development Rules
 
+## Pi-Speech Architecture
+
+This is **Pi-Speech**, a fork of pi-mono with integrated STT (speech-to-text) and TTS (text-to-speech).
+
+### STT pipeline (microphone -> prompt)
+
+```
+TypeWhisper macOS app ──HTTP──▶ STTService ──▶ OllamaParser (regex + T5 ONNX) ──▶ agent prompt
+```
+
+- `STTService` (`packages/coding-agent/src/services/stt.ts`) wraps `TypeWhisperAPI` (`typewhisper-api.ts`) to talk to the TypeWhisper macOS app REST API
+- `TypeWhisperAPI` auto-launches TypeWhisper.app if not running, discovers the API port via a JSON discovery file
+- **`OllamaParser`** (`ollama-parser.ts`) does NOT call Ollama despite the name. It uses:
+  1. **Deterministic regex pass**: removes filler words (um, uh, you know), resolves self-corrections ("wait no", "scratch that"), fixes homophones (their/they're, its/it's, to/too), normalizes punctuation and sentence casing
+  2. **Optional T5 grammar correction**: Google's T5 architecture via `@huggingface/transformers` (ONNX runtime). Model is `rabden/t5-tiny-gec-hone` (~11MB quantized, ~30-115ms CPU inference). Imported lazily on first use. Cached in `~/.cache/huggingface`. Graceful degradation on error.
+- `t5-service.ts` handles the lazy model loading and `correctGrammar()` function
+- `ParserConfig` still defines `endpoint`, `model`, `timeoutMs` fields (legacy from earlier Ollama-based design) but only `enabled` is used by the actual implementation
+
+### TTS pipeline (agent output -> audio)
+
+```
+agent message_update ──▶ RegexTTSPolisher ──▶ TTSService ──▶ Python worker (Piper/Kokoro) ──▶ audio
+```
+
+- During `message_update` events, new text is extracted from the assistant message and buffered until a sentence boundary (`[.!?\n]$`)
+- `flushTtsBuffer()` sends buffered text through `RegexTTSPolisher.polish()` then `TTSService.speak()`
+- **`RegexTTSPolisher`** (`tts-polisher.ts`): purely deterministic regex, NO LLM calls, NO network. Strips thinking tags, code fences, markdown formatting, list/diff markers, humanizes identifiers (snake_case, kebab-case, camelCase, file paths), normalizes punctuation. Skips text under 30 chars.
+- **`TTSService`** (`tts.ts`): spawns a persistent Python subprocess (`whisper_bot/tts_worker.py`) that preloads the TTS model once. Communicates via JSONL on stdin/stdout: `{"type":"speak","text":"...","speed":1.0}` → `{"type":"done"}`. Falls back to macOS `say` if Python unavailable.
+- Supported TTS backends (Python): Piper (`tts/piper.py`) and Kokoro (`tts/kokoro.py`, `tts/streaming_kokoro.py`)
+- Speech chains via `ttsSpeakChain` promise to avoid overlap while keeping sequential order
+
+### Slash commands (defined in `slash-commands.ts`)
+
+| Command | Handler location |
+|---------|-----------------|
+| `/stt` | `interactive-mode.ts` — `on`, `off`, `auto`, `parser` subcommands |
+| `/tts` | `interactive-mode.ts` — `on`, `off`, `polish` subcommands |
+| `/speed` | `interactive-mode.ts` — set playback speed 0.5-3.0 step 0.25 |
+
+### Keybindings (defined in `keybindings.ts`)
+
+| Action | Default key | Description |
+|--------|------------|-------------|
+| `app.recording.toggle` | `ctrl+space` | Start/stop STT dictation |
+| `app.tts.toggle` | (none) | Toggle TTS on/off |
+
+### Services index (`packages/coding-agent/src/services/index.ts`)
+
+Exports: `OllamaParser`, `STTService`, `TTSService`, `RegexTTSPolisher`, `TypeWhisperAPI`, and their types.
+
+### Settings (defined in `settings-manager.ts`)
+
+STT: `sttEnabled`, `sttAutoSubmit`, `sttParserEnabled`
+TTS: `ttsEnabled`, `ttsSpeed`, `ttsPolisherEnabled`
+
+### Whisper Bot (`packages/coding-agent/whisper_bot/`)
+
+Python side of the TTS pipeline. Notable files:
+- `tts/piper.py` — Piper TTS with speed control and multi-voice
+- `tts/kokoro.py`, `tts/streaming_kokoro.py` — Kokoro TTS
+- `tts/sentence_splitter.py` — smart sentence segmentation
+- `tts_worker.py` — persistent worker process (JSONL stdin/stdout protocol)
+- `parser/ollama.py` — Python Ollama parser (separate from TS version, calls Ollama HTTP API for qwen2.5-coder:3b). Used by the Python whisper_bot, NOT the TUI mode.
+
 ## Conversational Style
 
 - Keep answers short and concise
