@@ -378,8 +378,7 @@ export class InteractiveMode {
 	private ttsState: TTSState = "idle";
 	private lastSpokenText = "";
 	private ttsBuffer = "";
-	private ttsFlushTimeout: ReturnType<typeof setTimeout> | null = null;
-	private readonly TTS_FLUSH_DELAY_MS = 600;
+	private ttsSpeakChain: Promise<void> = Promise.resolve();
 
 	private options: InteractiveModeOptions;
 	private autoTrustOnReloadCwd: string | undefined;
@@ -2934,20 +2933,16 @@ export class InteractiveMode {
 						}
 					}
 
-					// TTS: buffer incoming text, speak on sentence boundaries or debounce
+					// TTS: queue text to speak (chains after any in-progress speech)
 					if (this.ttsService.enabled) {
 						const fullText = this.extractTextFromAssistantMessage(this.streamingMessage);
 						if (fullText && fullText.length > this.lastSpokenText.length) {
 							const newText = fullText.slice(this.lastSpokenText.length);
 							this.lastSpokenText = fullText;
 							this.ttsBuffer += newText;
-							// Flush on sentence boundary
+							// Flush on sentence boundary, otherwise chain to complete on message_end
 							if (/[.!?\n]$/.test(this.ttsBuffer.trim())) {
 								this.flushTtsBuffer();
-							} else {
-								// Debounce: flush after a quiet period
-								if (this.ttsFlushTimeout) clearTimeout(this.ttsFlushTimeout);
-								this.ttsFlushTimeout = setTimeout(() => this.flushTtsBuffer(), this.TTS_FLUSH_DELAY_MS);
 							}
 						}
 					}
@@ -5959,15 +5954,15 @@ export class InteractiveMode {
 		}, 3000);
 	}
 
+	/** Flush buffered text to TTS, chaining after any in-progress speech. */
 	private flushTtsBuffer(): void {
-		if (this.ttsFlushTimeout) {
-			clearTimeout(this.ttsFlushTimeout);
-			this.ttsFlushTimeout = null;
-		}
-		if (this.ttsBuffer.trim() && this.ttsService.enabled) {
-			this.ttsService.speak(this.ttsBuffer.trim());
+		const text = this.ttsBuffer.trim();
+		if (!text || !this.ttsService.enabled) {
+			this.ttsBuffer = "";
+			return;
 		}
 		this.ttsBuffer = "";
+		this.ttsSpeakChain = this.ttsSpeakChain.then(() => this.ttsService.speak(text)).catch(() => {}); // Swallow errors so the chain continues
 	}
 
 	stop(): void {
