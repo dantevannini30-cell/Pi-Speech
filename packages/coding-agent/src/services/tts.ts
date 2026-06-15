@@ -1,13 +1,15 @@
 /**
  * TTS (Text-to-Speech) service for Whisper-Pi.
  *
- * Provides speech synthesis by:
- * 1. Calling the Python whisper_bot TTS CLI (Piper/Kokoro) — primary
- * 2. Falling back to macOS `say` command if Python/piper unavailable
+ * Keeps a persistent Python subprocess with PiperVoice pre-loaded
+ * so model loading happens once, not per sentence. Falls back to
+ * macOS `say` if Python/piper is unavailable.
  *
- * The Python CLI wrappers are in packages/coding-agent/whisper-bot/:
- *   - tts_cli.py           — one-shot TTS (speak full text)
- *   - tts_streaming_cli.py — streaming TTS (sentences via stdin)
+ * The Python worker is at whisper_bot/tts_worker.py and communicates
+ * via JSONL on stdin/stdout:
+ *   -> {"type":"speak","text":"..."}
+ *   <- {"type":"done"}         (playback complete)
+ *   -> {"type":"shutdown"}
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
@@ -18,13 +20,9 @@ import { fileURLToPath } from "node:url";
 // Paths
 // ---------------------------------------------------------------------------
 
-/** Get the absolute path to the whisper-bot CLI scripts directory. */
 function getWhisperBotDir(): string {
-	// __dirname equivalent in ESM
 	const __filename = fileURLToPath(import.meta.url);
 	const __dirname = path.dirname(__filename);
-	// We're in packages/coding-agent/dist/services/tts.js
-	// The whisper-bot dir is at packages/coding-agent/whisper-bot/
 	return path.resolve(__dirname, "../../whisper_bot");
 }
 
@@ -34,8 +32,8 @@ function getWhisperBotDir(): string {
 
 export interface TTSServiceConfig {
 	enabled: boolean;
-	provider?: "piper" | "kokoro"; // which TTS engine to use
-	voice?: string; // voice name (e.g. "en_US-lessac-medium" for Piper, "af_heart" for Kokoro)
+	provider?: "piper" | "kokoro";
+	voice?: string;
 }
 
 export type TTSState = "idle" | "speaking";
@@ -52,21 +50,16 @@ export interface TTSCallbacks {
 // Service
 // ---------------------------------------------------------------------------
 
-/**
- * Text-to-speech service.
- *
- * Uses the Python whisper_bot TTS CLI by default, with macOS `say` as
- * a fallback.
- */
 export class TTSService {
 	private config: TTSServiceConfig;
 	private callbacks: TTSCallbacks;
 	private _state: TTSState = "idle";
 	private whisperBotDir: string;
-	private currentProcess: ChildProcess | null = null;
-	private childProcesses: ChildProcess[] = [];
-	private queue: string[] = [];
-	private isProcessing = false;
+	private worker: ChildProcess | null = null;
+	private pendingResolve: (() => void) | null = null;
+	private pendingReject: ((err: Error) => void) | null = null;
+	private buf = "";
+	private started = false;
 
 	constructor(config: TTSServiceConfig, callbacks: TTSCallbacks = {}) {
 		this.config = config;
@@ -90,248 +83,161 @@ export class TTSService {
 		return this.config.voice;
 	}
 
-	/**
-	 * Enable or disable TTS.
-	 * When disabled, speak() and speakSentence() are no-ops.
-	 */
 	setEnabled(enabled: boolean): void {
 		this.config.enabled = enabled;
-		if (!enabled) {
-			this.stop();
-		}
+		if (!enabled) this.stop();
 	}
 
-	/**
-	 * Set the voice.
-	 */
 	setVoice(voice: string): void {
 		this.config.voice = voice;
 	}
 
 	/**
-	 * Speak a full text. Queues it and processes the queue.
+	 * Speak text. Spawns the worker on first call, then reuses it.
 	 */
 	async speak(text: string): Promise<void> {
 		if (!this.config.enabled || !text.trim()) return;
-
-		this.queue.push(text);
-		if (!this.isProcessing) {
-			await this.processQueue();
-		}
+		await this.ensureWorker();
+		await this.sendText(text);
 	}
 
 	/**
-	 * Speak a single sentence immediately. Used for streaming TTS
-	 * where sentences arrive one at a time from the agent stream.
-	 */
-	async speakSentence(sentence: string): Promise<void> {
-		if (!this.config.enabled || !sentence.trim()) return;
-
-		if (this.isProcessing) {
-			this.queue.push(sentence);
-		} else {
-			await this.executeWithFallback(sentence, true);
-		}
-	}
-
-	/**
-	 * Immediately stop all speech.
+	 * Immediately stop all speech and kill the worker.
 	 */
 	stop(): void {
-		for (const proc of this.childProcesses) {
+		if (this.worker) {
 			try {
-				proc.kill("SIGTERM");
+				this.worker.stdin?.write(JSON.stringify({ type: "shutdown" }) + "\n");
 			} catch {
 				/* ignore */
 			}
-		}
-		if (this.currentProcess) {
 			try {
-				this.currentProcess.kill("SIGTERM");
+				this.worker.kill("SIGTERM");
 			} catch {
 				/* ignore */
 			}
+			this.worker = null;
 		}
-		this.currentProcess = null;
-		this.childProcesses = [];
-		this.queue = [];
-		this.isProcessing = false;
+		this.buf = "";
+		this.pendingResolve = null;
+		this.pendingReject = null;
+		this.started = false;
 		this.setState("idle");
 	}
 
 	// ------------------------------------------------------------------
-	// Queue processing
+	// Worker lifecycle
 	// ------------------------------------------------------------------
 
-	private async processQueue(): Promise<void> {
-		this.isProcessing = true;
+	private async ensureWorker(): Promise<void> {
+		if (this.worker && this.worker.exitCode === null) return;
 
-		while (this.queue.length > 0) {
-			const text = this.queue.shift()!;
-			await this.executeWithFallback(text, false);
-		}
+		const workerScript = path.join(this.whisperBotDir, "tts_worker.py");
+		const args = ["--provider", this.provider];
+		if (this.config.voice) args.push("--voice", this.config.voice);
 
-		this.isProcessing = false;
-		this.setState("idle");
-		this.callbacks.onDone?.();
+		this.worker = spawn("python3", [workerScript, ...args], {
+			cwd: path.dirname(this.whisperBotDir),
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+
+		this.buf = "";
+		this.worker.stdout?.setEncoding("utf-8");
+		this.worker.stdout?.on("data", (data: string) => {
+			this.buf += data;
+			this.processResponses();
+		});
+
+		this.worker.on("error", (err) => {
+			this.callbacks.onError?.(err);
+			this.worker = null;
+		});
+
+		this.worker.on("close", () => {
+			if (this.pendingReject) {
+				this.pendingReject(new Error("TTS worker died"));
+				this.pendingReject = null;
+				this.pendingResolve = null;
+			}
+			this.worker = null;
+			this.started = false;
+			this.setState("idle");
+		});
+
+		// Wait for worker to signal readiness
+		await new Promise<void>((resolve, reject) => {
+			const timeout = setTimeout(() => reject(new Error("TTS worker startup timeout")), 15_000);
+			const onData = (data: string) => {
+				if (data.includes('"ready"')) {
+					clearTimeout(timeout);
+					this.worker?.stdout?.removeListener("data", onData);
+					resolve();
+				}
+			};
+			this.worker?.stdout?.on("data", onData);
+			this.worker?.on("close", () => {
+				clearTimeout(timeout);
+				reject(new Error("TTS worker exited before ready"));
+			});
+		});
+
+		this.started = true;
 	}
 
 	// ------------------------------------------------------------------
-	// Python TTS (Piper/Kokoro)
+	// Send / receive
 	// ------------------------------------------------------------------
 
-	/**
-	 * Speak text via the Python one-shot CLI.
-	 */
-	private async executePythonOneShot(text: string): Promise<void> {
+	private async sendText(text: string): Promise<void> {
 		return new Promise((resolve, reject) => {
+			if (!this.worker || this.worker.exitCode !== null) {
+				reject(new Error("TTS worker not running"));
+				return;
+			}
+
+			this.pendingResolve = resolve;
+			this.pendingReject = reject;
+
 			this.setState("speaking");
 			this.callbacks.onSentenceStart?.(text);
 
-			const args = [path.join(this.whisperBotDir, "tts_cli.py"), "--text", text, "--provider", this.provider];
-			if (this.config.voice) {
-				args.push("--voice", this.config.voice);
-			}
+			const msg = JSON.stringify({ type: "speak", text }) + "\n";
+			this.worker.stdin?.write(msg);
+		});
+	}
 
-			const proc = spawn("python3", args, {
-				cwd: path.dirname(this.whisperBotDir),
-				stdio: ["ignore", "pipe", "pipe"],
-			});
-			this.currentProcess = proc;
-			this.childProcesses.push(proc);
+	private processResponses(): void {
+		const lines = this.buf.split("\n");
+		// Keep the last incomplete line in the buffer
+		this.buf = lines.pop() ?? "";
 
-			proc.on("error", (err) => {
-				this.callbacks.onError?.(err);
-				this.cleanupProcess(proc);
-				reject(err);
-			});
-
-			proc.on("close", (code) => {
-				this.cleanupProcess(proc);
-				this.callbacks.onSentenceEnd?.(text);
-				if (code !== 0) {
-					reject(new Error(`Python TTS exited with code ${code}`));
-				} else {
-					resolve();
+		for (const line of lines) {
+			if (!line.trim()) continue;
+			try {
+				const msg = JSON.parse(line);
+				if (msg.type === "done") {
+					this.callbacks.onSentenceEnd?.(msg.text ?? "");
+					const resolve = this.pendingResolve;
+					this.pendingResolve = null;
+					this.pendingReject = null;
+					this.setState("idle");
+					resolve?.();
+				} else if (msg.type === "error") {
+					const reject = this.pendingReject;
+					this.pendingResolve = null;
+					this.pendingReject = null;
+					this.setState("idle");
+					reject?.(new Error(msg.message ?? "TTS worker error"));
 				}
-			});
-		});
-	}
-
-	/**
-	 * Speak a single sentence via the Python streaming CLI.
-	 * The streaming CLI reads sentences from stdin, one per line.
-	 */
-	private async executePythonStreaming(sentence: string): Promise<void> {
-		return new Promise((resolve, reject) => {
-			this.setState("speaking");
-			this.callbacks.onSentenceStart?.(sentence);
-
-			const args = [path.join(this.whisperBotDir, "tts_streaming_cli.py"), "--provider", this.provider];
-			if (this.config.voice) {
-				args.push("--voice", this.config.voice);
+			} catch {
+				// Partial JSON line, wait for more data
 			}
-
-			const proc = spawn("python3", args, {
-				cwd: path.dirname(this.whisperBotDir),
-				stdio: ["pipe", "pipe", "pipe"],
-			});
-			this.currentProcess = proc;
-			this.childProcesses.push(proc);
-
-			// Send the sentence and signal EOF to speak it
-			proc.stdin?.write(sentence + "\n");
-			proc.stdin?.end();
-
-			proc.on("error", (err) => {
-				this.callbacks.onError?.(err);
-				this.cleanupProcess(proc);
-				reject(err);
-			});
-
-			proc.on("close", (code) => {
-				this.cleanupProcess(proc);
-				this.callbacks.onSentenceEnd?.(sentence);
-				if (code !== 0) {
-					reject(new Error(`Python TTS exited with code ${code}`));
-				} else {
-					resolve();
-				}
-			});
-		});
-	}
-
-	// ------------------------------------------------------------------
-	// Fallback: macOS `say`
-	// ------------------------------------------------------------------
-
-	/**
-	 * Speak text via macOS built-in `say` command (fallback).
-	 */
-	private async executeSay(text: string): Promise<void> {
-		return new Promise((resolve) => {
-			this.setState("speaking");
-			this.callbacks.onSentenceStart?.(text);
-
-			const args: string[] = [];
-			if (this.config.voice) {
-				args.push("-v", this.config.voice);
-			}
-			args.push(text);
-
-			const proc = spawn("say", args);
-			this.currentProcess = proc;
-			this.childProcesses.push(proc);
-
-			proc.on("error", (err) => {
-				this.callbacks.onError?.(err);
-				this.cleanupProcess(proc);
-				resolve();
-			});
-
-			proc.on("close", () => {
-				this.cleanupProcess(proc);
-				this.callbacks.onSentenceEnd?.(text);
-				resolve();
-			});
-		});
-	}
-
-	/**
-	 * Execute TTS with Python first, falling back to macOS `say`.
-	 * Streaming mode uses the stdin-based CLI; one-shot uses the --text CLI.
-	 */
-	private async executeWithFallback(text: string, streaming: boolean): Promise<void> {
-		// Try Python first
-		try {
-			if (streaming) {
-				await this.executePythonStreaming(text);
-			} else {
-				await this.executePythonOneShot(text);
-			}
-			return;
-		} catch (err) {
-			// Python TTS unavailable, fall back to macOS say
-			this.callbacks.onError?.(err instanceof Error ? err : new Error(String(err)));
-		}
-
-		// Fallback to macOS say
-		await this.executeSay(text);
-	}
-
-	// ------------------------------------------------------------------
-	// Helpers
-	// ------------------------------------------------------------------
-
-	private cleanupProcess(proc: ChildProcess): void {
-		if (this.currentProcess === proc) {
-			this.currentProcess = null;
-		}
-		const idx = this.childProcesses.indexOf(proc);
-		if (idx !== -1) {
-			this.childProcesses.splice(idx, 1);
 		}
 	}
+
+	// ------------------------------------------------------------------
+	// State
+	// ------------------------------------------------------------------
 
 	private setState(state: TTSState): void {
 		this._state = state;
