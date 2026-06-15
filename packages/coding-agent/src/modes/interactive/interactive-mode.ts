@@ -6037,9 +6037,10 @@ export class InteractiveMode {
 				if (text?.trim()) {
 					// Auto-submit if setting enabled and there's meaningful text
 					if (this.settingsManager.getSttAutoSubmit() && text.trim().length > 2) {
-						// Send directly to agent — don't populate the editor
-						await this.defaultEditor.onSubmit?.(text);
-						this.editor.setText("");
+						// Insert into editor and simulate Enter, which triggers
+						// the editor's submitValue(): reads text, clears editor, calls onSubmit
+						this.editor.setText(text);
+						this.editor.handleInput("\r");
 					} else {
 						// Just populate the editor for review
 						this.editor.setText(text);
