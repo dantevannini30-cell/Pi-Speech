@@ -282,7 +282,7 @@ function normalizePunctuation(text: string): string {
  * 2. T5 grammar pass (optional): fix remaining grammar issues via
  *    Transformers.js
  */
-export class OllamaParser implements ParserProvider {
+export class RegexT5Parser implements ParserProvider {
 	readonly config: ParserConfig;
 
 	constructor(config: ParserConfig) {

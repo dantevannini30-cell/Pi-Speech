@@ -12,7 +12,7 @@ TypeWhisper macOS app ──HTTP──▶ STTService ──▶ OllamaParser (reg
 
 - `STTService` (`packages/coding-agent/src/services/stt.ts`) wraps `TypeWhisperAPI` (`typewhisper-api.ts`) to talk to the TypeWhisper macOS app REST API
 - `TypeWhisperAPI` auto-launches TypeWhisper.app if not running, discovers the API port via a JSON discovery file
-- **`OllamaParser`** (`ollama-parser.ts`) does NOT call Ollama despite the name. It uses:
+- **`RegexT5Parser`** (`regex-t5-parser.ts`) uses:
   1. **Deterministic regex pass**: removes filler words (um, uh, you know), resolves self-corrections ("wait no", "scratch that"), fixes homophones (their/they're, its/it's, to/too), normalizes punctuation and sentence casing
   2. **Optional T5 grammar correction**: Google's T5 architecture via `@huggingface/transformers` (ONNX runtime). Model is `rabden/t5-tiny-gec-hone` (~11MB quantized, ~30-115ms CPU inference). Imported lazily on first use. Cached in `~/.cache/huggingface`. Graceful degradation on error.
 - `t5-service.ts` handles the lazy model loading and `correctGrammar()` function

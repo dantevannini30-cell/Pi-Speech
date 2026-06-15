@@ -89,7 +89,7 @@ import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import {
 	DEFAULT_PARSER_CONFIG,
-	OllamaParser,
+	RegexT5Parser,
 	type ParserProvider,
 	RegexTTSPolisher,
 	STTService,
@@ -134,6 +134,7 @@ import { SkillInvocationMessageComponent } from "./components/skill-invocation-m
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
+import { TTSVoiceSelectorComponent } from "./components/tts-voice-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
 import {
@@ -472,8 +473,8 @@ export class InteractiveMode {
 			},
 		);
 
-		// Initialize Ollama parser for STT cleanup
-		this.parserProvider = new OllamaParser({
+		// Initialize RegexT5Parser for STT cleanup
+		this.parserProvider = new RegexT5Parser({
 			enabled: this.settingsManager.getSttParserEnabled(),
 			endpoint: DEFAULT_PARSER_CONFIG.endpoint,
 			model: DEFAULT_PARSER_CONFIG.model,
@@ -485,7 +486,7 @@ export class InteractiveMode {
 			{
 				enabled: ttsEnabled,
 				provider: "piper",
-				voice: "en_US-lessac-medium",
+				voice: this.settingsManager.getTtsVoice(),
 				speed: this.settingsManager.getTtsSpeed(),
 			},
 			{
@@ -2831,6 +2832,15 @@ export class InteractiveMode {
 						this.settingsManager.setTtsPolisherEnabled(false);
 						this.showMessage("TTS polisher disabled");
 					}
+				} else if (arg === "model" || arg.startsWith("model ")) {
+					const modelArg = arg.startsWith("model ") ? arg.slice(6).trim() : "";
+					if (!modelArg) {
+						this.showTTSVoiceSelector();
+					} else {
+						this.settingsManager.setTtsVoice(modelArg);
+						this.ttsService.setVoice(modelArg);
+						this.showMessage(`TTS voice set to ${modelArg}`);
+					}
 				}
 				return;
 			}
@@ -4466,6 +4476,26 @@ export class InteractiveMode {
 				},
 			});
 			return { component: selector, focus: selector };
+		});
+	}
+
+	private showTTSVoiceSelector(): void {
+		this.showSelector((done) => {
+			const selector = new TTSVoiceSelectorComponent(
+				"piper",
+				this.settingsManager.getTtsVoice(),
+				(voice) => {
+					this.settingsManager.setTtsVoice(voice);
+					this.ttsService.setVoice(voice);
+					done();
+					this.showStatus(`TTS voice: ${voice}`);
+				},
+				() => {
+					done();
+					this.ui.requestRender();
+				},
+			);
+			return { component: selector, focus: selector.getSelectList() };
 		});
 	}
 

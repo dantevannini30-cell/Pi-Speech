@@ -92,7 +92,7 @@ All voice settings are accessible via the settings UI (`/settings`):
 │  STTService ──▶ TypeWhisperAPI ──▶ TypeWhisper macOS  │
 │       │                                                │
 │       ▼                                                │
-│  OllamaParser (class name only — actually uses)        │
+│  RegexT5Parser                                          │
 │     ├─ 1. Regex pass (fillers, corrections, homophones)│
 │     └─ 2. T5 grammar correction (rabden/t5-tiny-gec,   │
 │             Transformers.js/ONNX, no API calls)          │
