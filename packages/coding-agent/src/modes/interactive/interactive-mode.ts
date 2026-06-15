@@ -89,8 +89,8 @@ import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import {
 	DEFAULT_PARSER_CONFIG,
-	RegexT5Parser,
 	type ParserProvider,
+	RegexT5Parser,
 	RegexTTSPolisher,
 	STTService,
 	type STTState,
@@ -385,10 +385,12 @@ export class InteractiveMode {
 	// STT/TTS services for Whisper-Pi
 	private sttService!: STTService;
 	private ttsService!: TTSService;
+	// biome-ignore lint/correctness/noUnusedPrivateClassMembers: written by onStateChange callbacks
 	private sttState: STTState = "idle";
+	// biome-ignore lint/correctness/noUnusedPrivateClassMembers: written by onStateChange callbacks
+	private ttsState: TTSState = "idle";
 	private parserProvider!: ParserProvider;
 	private ttsPolisherProvider!: TTSPolisherProvider;
-	private ttsState: TTSState = "idle";
 	private lastSpokenText = "";
 	private ttsBuffer = "";
 	private ttsSpeakChain: Promise<void> = Promise.resolve();
@@ -485,7 +487,7 @@ export class InteractiveMode {
 		this.ttsService = new TTSService(
 			{
 				enabled: ttsEnabled,
-				provider: "piper",
+				provider: this.settingsManager.getTtsProvider(),
 				voice: this.settingsManager.getTtsVoice(),
 				speed: this.settingsManager.getTtsSpeed(),
 			},
@@ -500,6 +502,7 @@ export class InteractiveMode {
 				},
 				onError: (err) => {
 					console.error("TTS error:", err.message);
+					this.showWarning(`TTS error: ${err.message}`);
 				},
 			},
 		);
@@ -2837,9 +2840,24 @@ export class InteractiveMode {
 					if (!modelArg) {
 						this.showTTSVoiceSelector();
 					} else {
-						this.settingsManager.setTtsVoice(modelArg);
-						this.ttsService.setVoice(modelArg);
-						this.showMessage(`TTS voice set to ${modelArg}`);
+						let provider: "piper" | "kokoro";
+						let voice: string;
+						if (modelArg.includes(":")) {
+							const parts = modelArg.split(":");
+							provider = parts[0] === "kokoro" ? "kokoro" : "piper";
+							voice = parts[1];
+						} else {
+							voice = modelArg;
+							// Infer provider from voice name pattern:
+							// Kokoro voices: ^[ab][fm]_ (e.g. af_bella, am_adam, bf_emma)
+							// Piper voices: en_US-lessac-medium, etc.
+							provider = /^[ab][fm]_/.test(voice) ? "kokoro" : "piper";
+						}
+						this.settingsManager.setTtsProvider(provider);
+						this.settingsManager.setTtsVoice(voice);
+						this.ttsService.setProvider(provider);
+						this.ttsService.setVoice(voice);
+						this.showMessage(`TTS voice set to ${voice} (${provider})`);
 					}
 				}
 				return;
@@ -2852,7 +2870,7 @@ export class InteractiveMode {
 					return;
 				}
 				const speed = parseFloat(arg);
-				if (isNaN(speed) || speed < 0.5 || speed > 3.0) {
+				if (Number.isNaN(speed) || speed < 0.5 || speed > 3.0) {
 					this.showMessage("Speed must be between 0.5 and 3.0");
 					return;
 				}
@@ -4482,13 +4500,18 @@ export class InteractiveMode {
 	private showTTSVoiceSelector(): void {
 		this.showSelector((done) => {
 			const selector = new TTSVoiceSelectorComponent(
-				"piper",
 				this.settingsManager.getTtsVoice(),
-				(voice) => {
+				(value) => {
+					// value is "provider:voice" compound format
+					const parts = value.split(":");
+					const provider = parts[0] === "kokoro" ? "kokoro" : "piper";
+					const voice = parts[1];
+					this.settingsManager.setTtsProvider(provider);
 					this.settingsManager.setTtsVoice(voice);
+					this.ttsService.setProvider(provider);
 					this.ttsService.setVoice(voice);
 					done();
-					this.showStatus(`TTS voice: ${voice}`);
+					this.showStatus(`TTS voice: ${voice} (${provider})`);
 				},
 				() => {
 					done();
@@ -6011,7 +6034,7 @@ export class InteractiveMode {
 				await this.sttService.stopRecording();
 				// Footer indicator shows "transcribing" now
 				const text = await this.sttService.getTranscribedText(60_000);
-				if (text && text.trim()) {
+				if (text?.trim()) {
 					// Auto-submit if setting enabled and there's meaningful text
 					if (this.settingsManager.getSttAutoSubmit() && text.trim().length > 2) {
 						// Send directly to agent — don't populate the editor
@@ -6090,7 +6113,13 @@ export class InteractiveMode {
 				await this.ttsService.speak(text);
 			}
 		};
-		this.ttsSpeakChain = this.ttsSpeakChain.then(() => speak()).catch(() => {}); // Swallow errors so the chain continues
+		this.ttsSpeakChain = this.ttsSpeakChain
+			.then(() => speak())
+			.catch((e) => {
+				const msg = e instanceof Error ? e.message : String(e);
+				console.error("TTS error:", msg);
+				this.showWarning(`TTS error: ${msg}`);
+			});
 	}
 
 	stop(): void {

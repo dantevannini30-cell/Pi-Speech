@@ -116,6 +116,7 @@ export interface Settings {
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
 	sttEnabled?: boolean; // default: true - enable speech-to-text (requires TypeWhisper)
 	ttsVoice?: string; // TTS voice/model name
+	ttsProvider?: string; // TTS provider: "piper" or "kokoro"
 	ttsEnabled?: boolean; // default: true - enable text-to-speech
 	ttsSpeed?: number; // default: 1.0, range: 0.5-3.0, step: 0.25
 	ttsPolisherEnabled?: boolean; // default: true - polish TTS output through a local LLM before speaking
@@ -1234,6 +1235,17 @@ export class SettingsManager {
 	setTtsVoice(voice: string): void {
 		this.globalSettings.ttsVoice = voice;
 		this.markModified("ttsVoice");
+		this.save();
+	}
+
+	getTtsProvider(): "piper" | "kokoro" {
+		const provider = this.settings.ttsProvider ?? "piper";
+		return provider === "kokoro" ? "kokoro" : "piper";
+	}
+
+	setTtsProvider(provider: string): void {
+		this.globalSettings.ttsProvider = provider;
+		this.markModified("ttsProvider");
 		this.save();
 	}
 

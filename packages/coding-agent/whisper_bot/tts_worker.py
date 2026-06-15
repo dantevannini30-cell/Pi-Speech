@@ -15,6 +15,16 @@ Usage:
 
 import sys, os, json
 
+_DEBUG_LOG = '/tmp/tts_worker_debug.log'
+def _debug_log(msg: str) -> None:
+    with open(_DEBUG_LOG, 'a') as f:
+        f.write(msg + '\n')
+        f.flush()
+
+_debug_log(f'__file__={__file__}')
+_debug_log(f'CWD={os.getcwd()}')
+_debug_log(f'sys.argv={sys.argv}')
+
 # Add coding-agent to path so whisper_bot is importable
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _CODING_AGENT_DIR = os.path.dirname(_SCRIPT_DIR)
@@ -43,6 +53,8 @@ def _resample(audio: np.ndarray, speed: float) -> np.ndarray:
     frac = indices - floor_idx
     return audio[floor_idx] * (1.0 - frac) + audio[ceil_idx] * frac
 
+
+_debug_log('definitions loaded, entering main()')
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Persistent TTS worker")

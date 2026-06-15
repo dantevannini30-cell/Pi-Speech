@@ -60,7 +60,6 @@ export class TTSService {
 	private pendingResolve: (() => void) | null = null;
 	private pendingReject: ((err: Error) => void) | null = null;
 	private buf = "";
-	private started = false;
 
 	constructor(config: TTSServiceConfig, callbacks: TTSCallbacks = {}) {
 		this.config = config;
@@ -92,10 +91,27 @@ export class TTSService {
 	setVoice(voice: string): void {
 		if (this.config.voice === voice) return;
 		this.config.voice = voice;
-		// Kill the current worker so it re-spawns with the new voice on next speak()
+		this.killWorker();
+	}
+
+	setProvider(provider: "piper" | "kokoro"): void {
+		if (this.config.provider === provider) return;
+		this.config.provider = provider;
+		this.killWorker();
+	}
+
+	get speed(): number {
+		return this.config.speed ?? 1.0;
+	}
+
+	setSpeed(speed: number): void {
+		this.config.speed = Math.max(0.5, Math.min(3.0, Math.round(speed / 0.25) * 0.25));
+	}
+
+	private killWorker(): void {
 		if (this.worker) {
 			try {
-				this.worker.stdin?.write(JSON.stringify({ type: "shutdown" }) + "\n");
+				this.worker.stdin?.write(`${JSON.stringify({ type: "shutdown" })}\n`);
 			} catch {
 				/* ignore */
 			}
@@ -109,16 +125,7 @@ export class TTSService {
 		this.buf = "";
 		this.pendingResolve = null;
 		this.pendingReject = null;
-		this.started = false;
 		this.setState("idle");
-	}
-
-	get speed(): number {
-		return this.config.speed ?? 1.0;
-	}
-
-	setSpeed(speed: number): void {
-		this.config.speed = Math.max(0.5, Math.min(3.0, Math.round(speed / 0.25) * 0.25));
 	}
 
 	/**
@@ -134,24 +141,7 @@ export class TTSService {
 	 * Immediately stop all speech and kill the worker.
 	 */
 	stop(): void {
-		if (this.worker) {
-			try {
-				this.worker.stdin?.write(JSON.stringify({ type: "shutdown" }) + "\n");
-			} catch {
-				/* ignore */
-			}
-			try {
-				this.worker.kill("SIGTERM");
-			} catch {
-				/* ignore */
-			}
-			this.worker = null;
-		}
-		this.buf = "";
-		this.pendingResolve = null;
-		this.pendingReject = null;
-		this.started = false;
-		this.setState("idle");
+		this.killWorker();
 	}
 
 	// ------------------------------------------------------------------
@@ -177,7 +167,14 @@ export class TTSService {
 			this.processResponses();
 		});
 
+		// Log worker stderr for debugging
+		this.worker.stderr?.setEncoding("utf-8");
+		this.worker.stderr?.on("data", (data: string) => {
+			console.error("TTS worker stderr:", data);
+		});
+
 		this.worker.on("error", (err) => {
+			console.error("TTS worker error:", err.message);
 			this.callbacks.onError?.(err);
 			this.worker = null;
 		});
@@ -189,7 +186,6 @@ export class TTSService {
 				this.pendingResolve = null;
 			}
 			this.worker = null;
-			this.started = false;
 			this.setState("idle");
 		});
 
@@ -209,8 +205,6 @@ export class TTSService {
 				reject(new Error("TTS worker exited before ready"));
 			});
 		});
-
-		this.started = true;
 	}
 
 	// ------------------------------------------------------------------
@@ -230,7 +224,7 @@ export class TTSService {
 			this.setState("speaking");
 			this.callbacks.onSentenceStart?.(text);
 
-			const msg = JSON.stringify({ type: "speak", text, speed: this.speed }) + "\n";
+			const msg = `${JSON.stringify({ type: "speak", text, speed: this.speed })}\n`;
 			this.worker.stdin?.write(msg);
 		});
 	}

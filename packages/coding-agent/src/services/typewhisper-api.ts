@@ -123,7 +123,7 @@ export class TypeWhisperAPI {
 			"x-engine": engine ?? "parakeet",
 		};
 		if (discovered.token) {
-			this.headers["Authorization"] = `Bearer ${discovered.token}`;
+			this.headers.Authorization = `Bearer ${discovered.token}`;
 		}
 	}
 
