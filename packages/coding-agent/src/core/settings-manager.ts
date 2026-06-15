@@ -115,6 +115,7 @@ export interface Settings {
 	autocompleteMaxVisible?: number; // Max visible items in autocomplete dropdown (default: 5)
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
 	sttEnabled?: boolean; // default: true - enable speech-to-text (requires TypeWhisper)
+	ttsVoice?: string; // TTS voice/model name
 	ttsEnabled?: boolean; // default: true - enable text-to-speech
 	ttsSpeed?: number; // default: 1.0, range: 0.5-3.0, step: 0.25
 	ttsPolisherEnabled?: boolean; // default: true - polish TTS output through a local LLM before speaking
@@ -1223,6 +1224,16 @@ export class SettingsManager {
 	setTtsSpeed(speed: number): void {
 		this.globalSettings.ttsSpeed = Math.max(0.5, Math.min(3.0, Math.round(speed / 0.25) * 0.25));
 		this.markModified("ttsSpeed");
+		this.save();
+	}
+
+	getTtsVoice(): string {
+		return this.settings.ttsVoice ?? "en_US-lessac-medium";
+	}
+
+	setTtsVoice(voice: string): void {
+		this.globalSettings.ttsVoice = voice;
+		this.markModified("ttsVoice");
 		this.save();
 	}
 

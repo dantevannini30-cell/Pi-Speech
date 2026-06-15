@@ -90,7 +90,27 @@ export class TTSService {
 	}
 
 	setVoice(voice: string): void {
+		if (this.config.voice === voice) return;
 		this.config.voice = voice;
+		// Kill the current worker so it re-spawns with the new voice on next speak()
+		if (this.worker) {
+			try {
+				this.worker.stdin?.write(JSON.stringify({ type: "shutdown" }) + "\n");
+			} catch {
+				/* ignore */
+			}
+			try {
+				this.worker.kill("SIGTERM");
+			} catch {
+				/* ignore */
+			}
+			this.worker = null;
+		}
+		this.buf = "";
+		this.pendingResolve = null;
+		this.pendingReject = null;
+		this.started = false;
+		this.setState("idle");
 	}
 
 	get speed(): number {

@@ -38,7 +38,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "resume", description: "Resume a different session" },
 	{ name: "reload", description: "Reload keybindings, extensions, skills, prompts, and themes" },
 	{ name: "stt", description: "STT commands: on, off, auto (toggle auto-submit)" },
-	{ name: "tts", description: "TTS commands: on, off" },
+	{ name: "tts", description: "TTS commands: on, off, model" },
 	{ name: "speed", description: "Set TTS playback speed: 0.5-3.0 (step 0.25)" },
 	{ name: "quit", description: `Quit ${APP_NAME}` },
 ];

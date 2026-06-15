@@ -33,6 +33,7 @@ export { ThinkingSelectorComponent } from "./thinking-selector.ts";
 export { ToolExecutionComponent, type ToolExecutionOptions } from "./tool-execution.ts";
 export { TreeSelectorComponent } from "./tree-selector.ts";
 export { TrustSelectorComponent } from "./trust-selector.ts";
+export { TTSVoiceSelectorComponent } from "./tts-voice-selector.ts";
 export { UserMessageComponent } from "./user-message.ts";
 export { UserMessageSelectorComponent } from "./user-message-selector.ts";
 export { truncateToVisualLines, type VisualTruncateResult } from "./visual-truncate.ts";
