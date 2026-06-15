@@ -4,7 +4,7 @@ import type { AgentSession } from "../../../core/agent-session.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
 import { theme } from "../theme/theme.ts";
 
-export type STTIndicator = "idle" | "recording" | "transcribing";
+export type STTIndicator = "idle" | "recording" | "transcribing" | "parsing";
 export type TTSIndicator = "idle" | "speaking";
 
 /**
@@ -243,6 +243,8 @@ export class FooterComponent implements Component {
 		let indicators = "";
 		if (this.sttIndicator === "recording") {
 			indicators += theme.fg("error", "🎤 REC ");
+		} else if (this.sttIndicator === "parsing") {
+			indicators += theme.fg("muted", "🔍 parse ");
 		} else if (this.sttIndicator === "transcribing") {
 			indicators += theme.fg("warning", "⚡ STT ");
 		}

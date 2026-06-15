@@ -87,7 +87,17 @@ import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
-import { STTService, type STTState, TTSService, type TTSState } from "../../services/index.ts";
+import {
+	DEFAULT_PARSER_CONFIG,
+	OllamaParser,
+	type ParserProvider,
+	RegexTTSPolisher,
+	STTService,
+	type STTState,
+	type TTSPolisherProvider,
+	TTSService,
+	type TTSState,
+} from "../../services/index.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
@@ -375,6 +385,8 @@ export class InteractiveMode {
 	private sttService!: STTService;
 	private ttsService!: TTSService;
 	private sttState: STTState = "idle";
+	private parserProvider!: ParserProvider;
+	private ttsPolisherProvider!: TTSPolisherProvider;
 	private ttsState: TTSState = "idle";
 	private lastSpokenText = "";
 	private ttsBuffer = "";
@@ -449,6 +461,7 @@ export class InteractiveMode {
 					// Map STT state to footer indicator
 					if (state === "recording") this.footer.setSTTIndicator("recording");
 					else if (state === "transcribing") this.footer.setSTTIndicator("transcribing");
+					else if (state === "parsing") this.footer.setSTTIndicator("parsing");
 					else this.footer.setSTTIndicator("idle");
 					this.footer.invalidate();
 					this.ui.requestRender();
@@ -458,6 +471,16 @@ export class InteractiveMode {
 				},
 			},
 		);
+
+		// Initialize Ollama parser for STT cleanup
+		this.parserProvider = new OllamaParser({
+			enabled: this.settingsManager.getSttParserEnabled(),
+			endpoint: DEFAULT_PARSER_CONFIG.endpoint,
+			model: DEFAULT_PARSER_CONFIG.model,
+			timeoutMs: DEFAULT_PARSER_CONFIG.timeoutMs,
+		});
+		this.sttService.setParser(this.parserProvider);
+
 		this.ttsService = new TTSService(
 			{
 				enabled: ttsEnabled,
@@ -479,6 +502,11 @@ export class InteractiveMode {
 				},
 			},
 		);
+
+		// Initialize TTS polisher for cleaning agent output before speech
+		this.ttsPolisherProvider = new RegexTTSPolisher({
+			enabled: this.settingsManager.getTtsPolisherEnabled(),
+		});
 	}
 
 	private async detectThemeIfUnset(): Promise<void> {
@@ -2749,6 +2777,25 @@ export class InteractiveMode {
 					const newVal = !this.settingsManager.getSttAutoSubmit();
 					this.settingsManager.setSttAutoSubmit(newVal);
 					this.showMessage(newVal ? "STT auto-submit on" : "STT auto-submit off");
+				} else if (arg === "parser" || arg.startsWith("parser ")) {
+					const parserArg = arg.startsWith("parser ") ? arg.slice(7).trim().toLowerCase() : "toggle";
+					if (
+						parserArg === "on" ||
+						parserArg === "enable" ||
+						(parserArg === "toggle" && !this.settingsManager.getSttParserEnabled())
+					) {
+						this.settingsManager.setSttParserEnabled(true);
+						this.sttService.setParserEnabled(true);
+						this.showMessage("STT parser enabled");
+					} else if (
+						parserArg === "off" ||
+						parserArg === "disable" ||
+						(parserArg === "toggle" && this.settingsManager.getSttParserEnabled())
+					) {
+						this.settingsManager.setSttParserEnabled(false);
+						this.sttService.setParserEnabled(false);
+						this.showMessage("STT parser disabled");
+					}
 				}
 				return;
 			}
@@ -2767,6 +2814,23 @@ export class InteractiveMode {
 					this.settingsManager.setTtsEnabled(false);
 					this.ttsService.setEnabled(false);
 					this.showMessage("TTS disabled");
+				} else if (arg === "polish" || arg.startsWith("polish ")) {
+					const polishArg = arg.startsWith("polish ") ? arg.slice(7).trim().toLowerCase() : "toggle";
+					if (
+						polishArg === "on" ||
+						polishArg === "enable" ||
+						(polishArg === "toggle" && !this.settingsManager.getTtsPolisherEnabled())
+					) {
+						this.settingsManager.setTtsPolisherEnabled(true);
+						this.showMessage("TTS polisher enabled");
+					} else if (
+						polishArg === "off" ||
+						polishArg === "disable" ||
+						(polishArg === "toggle" && this.settingsManager.getTtsPolisherEnabled())
+					) {
+						this.settingsManager.setTtsPolisherEnabled(false);
+						this.showMessage("TTS polisher disabled");
+					}
 				}
 				return;
 			}
@@ -5677,7 +5741,7 @@ export class InteractiveMode {
 | \`${recordingToggle}\` | Toggle STT recording (start/stop dictation) |
 | \`${ttsToggle}\` | Toggle TTS (text-to-speech) on/off |
 | \`/stt\` | STT commands: \`/stt on\`, \`/stt off\`, \`/stt auto\` |
-| \`/tts\` | TTS commands: \`/tts on\`, \`/tts off\` |
+| \`/tts\` | TTS commands: \`/tts on\`, \`/tts off\`, \`/tts polish\` |
 | \`/speed\` | Set TTS playback speed: \`/speed\` (show), \`/speed 2\` (0.5-3.0, step 0.25) |
 `;
 
@@ -5980,13 +6044,23 @@ export class InteractiveMode {
 
 	/** Flush buffered text to TTS, chaining after any in-progress speech. */
 	private flushTtsBuffer(): void {
-		const text = this.ttsBuffer.trim();
-		if (!text || !this.ttsService.enabled) {
+		const rawText = this.ttsBuffer.trim();
+		if (!rawText || !this.ttsService.enabled) {
 			this.ttsBuffer = "";
 			return;
 		}
 		this.ttsBuffer = "";
-		this.ttsSpeakChain = this.ttsSpeakChain.then(() => this.ttsService.speak(text)).catch(() => {}); // Swallow errors so the chain continues
+
+		// Polish text for TTS if polisher is enabled (check settings manager so runtime toggles work)
+		const speak = async () => {
+			const text = this.settingsManager.getTtsPolisherEnabled()
+				? await this.ttsPolisherProvider.polish(rawText)
+				: rawText;
+			if (text) {
+				await this.ttsService.speak(text);
+			}
+		};
+		this.ttsSpeakChain = this.ttsSpeakChain.then(() => speak()).catch(() => {}); // Swallow errors so the chain continues
 	}
 
 	stop(): void {

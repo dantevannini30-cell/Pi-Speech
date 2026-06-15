@@ -117,7 +117,12 @@ export interface Settings {
 	sttEnabled?: boolean; // default: true - enable speech-to-text (requires TypeWhisper)
 	ttsEnabled?: boolean; // default: true - enable text-to-speech
 	ttsSpeed?: number; // default: 1.0, range: 0.5-3.0, step: 0.25
+	ttsPolisherEnabled?: boolean; // default: true - polish TTS output through a local LLM before speaking
+	ttsPolisherEndpoint?: string; // default: "http://localhost:11434/v1" - Ollama endpoint for TTS polishing
+	ttsPolisherModel?: string; // default: "qwen2.5:1.5b" - model for TTS polishing
+	ttsPolisherTimeoutMs?: number; // default: 3000 - per-polish timeout in milliseconds
 	sttAutoSubmit?: boolean; // default: true - auto-submit STT transcription when recording stops
+	sttParserEnabled?: boolean; // default: true - clean STT output through a local LLM parser
 	markdown?: MarkdownSettings;
 	warnings?: WarningSettings;
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
@@ -1228,6 +1233,56 @@ export class SettingsManager {
 	setSttAutoSubmit(autoSubmit: boolean): void {
 		this.globalSettings.sttAutoSubmit = autoSubmit;
 		this.markModified("sttAutoSubmit");
+		this.save();
+	}
+
+	getSttParserEnabled(): boolean {
+		return this.settings.sttParserEnabled ?? true;
+	}
+
+	setSttParserEnabled(enabled: boolean): void {
+		this.globalSettings.sttParserEnabled = enabled;
+		this.markModified("sttParserEnabled");
+		this.save();
+	}
+
+	getTtsPolisherEnabled(): boolean {
+		return this.settings.ttsPolisherEnabled ?? true;
+	}
+
+	setTtsPolisherEnabled(enabled: boolean): void {
+		this.globalSettings.ttsPolisherEnabled = enabled;
+		this.markModified("ttsPolisherEnabled");
+		this.save();
+	}
+
+	getTtsPolisherEndpoint(): string {
+		return this.settings.ttsPolisherEndpoint ?? "http://localhost:11434/v1";
+	}
+
+	setTtsPolisherEndpoint(endpoint: string): void {
+		this.globalSettings.ttsPolisherEndpoint = endpoint;
+		this.markModified("ttsPolisherEndpoint");
+		this.save();
+	}
+
+	getTtsPolisherModel(): string {
+		return this.settings.ttsPolisherModel ?? "qwen2.5:1.5b";
+	}
+
+	setTtsPolisherModel(model: string): void {
+		this.globalSettings.ttsPolisherModel = model;
+		this.markModified("ttsPolisherModel");
+		this.save();
+	}
+
+	getTtsPolisherTimeoutMs(): number {
+		return this.settings.ttsPolisherTimeoutMs ?? 3000;
+	}
+
+	setTtsPolisherTimeoutMs(timeoutMs: number): void {
+		this.globalSettings.ttsPolisherTimeoutMs = timeoutMs;
+		this.markModified("ttsPolisherTimeoutMs");
 		this.save();
 	}
 }
