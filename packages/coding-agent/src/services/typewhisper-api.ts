@@ -217,16 +217,17 @@ export class TypeWhisperAPI {
 		});
 
 		if (res.status === 409) {
-			// Already recording — that's fine, the existing session is still active.
-			// Try to extract the session ID from the error body.
-			try {
-				const body = (await res.json()) as Record<string, unknown>;
-				if (body.id) return String(body.id);
-			} catch {
-				// Couldn't parse, generate a placeholder so the caller can proceed
+			// Already recording — extract the existing session ID from the response.
+			// TypeWhisper may return it at body.id, body.session.id, or body.sessionId.
+			const body = (await res.json()) as Record<string, unknown>;
+			const sessionId = body.id || (body.session as Record<string, unknown> | undefined)?.id || body.sessionId;
+			if (sessionId && typeof sessionId === "string") {
+				return sessionId;
 			}
-			// Return a sentinel so the caller knows recording is active
-			return "already-recording";
+			throw new TypeWhisperError(
+				"Already recording but could not determine session ID. Stop the current session first.",
+				409,
+			);
 		}
 
 		if (!res.ok) {
