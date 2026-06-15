@@ -26,6 +26,12 @@ function getWhisperBotDir(): string {
 	return path.resolve(__dirname, "../../whisper_bot");
 }
 
+function getVenvPython(): string {
+	const __filename = fileURLToPath(import.meta.url);
+	const __dirname = path.dirname(__filename);
+	return path.resolve(__dirname, "../../.venv/bin/python3");
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -155,7 +161,7 @@ export class TTSService {
 		const args = ["--provider", this.provider];
 		if (this.config.voice) args.push("--voice", this.config.voice);
 
-		this.worker = spawn("python3", [workerScript, ...args], {
+		this.worker = spawn(getVenvPython(), [workerScript, ...args], {
 			cwd: path.dirname(this.whisperBotDir),
 			stdio: ["pipe", "pipe", "pipe"],
 		});
