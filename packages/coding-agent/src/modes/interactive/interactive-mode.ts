@@ -5582,6 +5582,10 @@ export class InteractiveMode {
 		const dequeue = this.getAppKeyDisplay("app.message.dequeue");
 		const pasteImage = this.getAppKeyDisplay("app.clipboard.pasteImage");
 
+		// Voice (STT/TTS) keybindings
+		const recordingToggle = this.getAppKeyDisplay("app.recording.toggle");
+		const ttsToggle = this.getAppKeyDisplay("app.tts.toggle");
+
 		let hotkeys = `
 **Navigation**
 | Key | Action |
@@ -5627,6 +5631,14 @@ export class InteractiveMode {
 | \`/\` | Slash commands |
 | \`!\` | Run bash command |
 | \`!!\` | Run bash command (excluded from context) |
+
+**Voice**
+| Key | Action |
+|-----|--------|
+| \`${recordingToggle}\` | Toggle STT recording (start/stop dictation) |
+| \`${ttsToggle}\` | Toggle TTS (text-to-speech) on/off |
+| \`/stt\` | STT commands: \`/stt on\`, \`/stt off\`, \`/stt auto\` |
+| \`/tts\` | TTS commands: \`/tts on\`, \`/tts off\` |
 `;
 
 		// Add extension-registered shortcuts
@@ -5866,10 +5878,14 @@ export class InteractiveMode {
 				// Footer indicator shows "transcribing" now
 				const text = await this.sttService.getTranscribedText(60_000);
 				if (text && text.trim()) {
-					this.editor.setText(text);
 					// Auto-submit if setting enabled and there's meaningful text
 					if (this.settingsManager.getSttAutoSubmit() && text.trim().length > 2) {
+						// Send directly to agent — don't populate the editor
 						await this.defaultEditor.onSubmit?.(text);
+						this.editor.setText("");
+					} else {
+						// Just populate the editor for review
+						this.editor.setText(text);
 					}
 				} else {
 					this.showMessage("(no speech detected)");
