@@ -35,7 +35,7 @@ agent message_update ──▶ RegexTTSPolisher ──▶ TTSService ──▶ P
 
 | Command | Handler location |
 |---------|-----------------|
-| `/stt` | `interactive-mode.ts` — `on`, `off`, `auto`, `parser` subcommands |
+| `/stt` | `interactive-mode.ts` — `on`, `off`, `auto`, `parser`, `vad` subcommands |
 | `/tts` | `interactive-mode.ts` — `on`, `off`, `polish` subcommands |
 | `/speed` | `interactive-mode.ts` — set playback speed 0.5-3.0 step 0.25 |
 
