@@ -457,7 +457,10 @@ export class InteractiveMode {
 		const sttEnabled = this.settingsManager.getSttEnabled();
 		const ttsEnabled = this.settingsManager.getTtsEnabled();
 		this.sttService = new STTService(
-			{ enabled: sttEnabled },
+			{
+				enabled: sttEnabled,
+				loadMode: this.settingsManager.getTextstreamLoadMode(),
+			},
 			{
 				onStateChange: (state) => {
 					this.sttState = state;
@@ -468,6 +471,18 @@ export class InteractiveMode {
 					else this.footer.setSTTIndicator("idle");
 					this.footer.invalidate();
 					this.ui.requestRender();
+				},
+				onTranscription: (text) => {
+					if (text?.trim()) {
+						if (this.settingsManager.getSttAutoSubmit() && text.trim().length > 2) {
+							this.editor.setText(text);
+							this.editor.handleInput("\r");
+						} else {
+							this.editor.setText(text);
+						}
+					} else {
+						this.showMessage("(no speech detected)");
+					}
 				},
 				onError: (err) => {
 					this.showWarning(`STT error: ${err.message}`);
@@ -2781,6 +2796,24 @@ export class InteractiveMode {
 					const newVal = !this.settingsManager.getSttAutoSubmit();
 					this.settingsManager.setSttAutoSubmit(newVal);
 					this.showMessage(newVal ? "STT auto-submit on" : "STT auto-submit off");
+				} else if (arg === "load" || arg.startsWith("load ")) {
+					const loadArg = arg.startsWith("load ") ? arg.slice(5).trim().toLowerCase() : "toggle";
+					if (loadArg === "auto") {
+						this.settingsManager.setTextstreamLoadMode("auto");
+						this.sttService.setLoadMode("auto");
+						// If STT is enabled, start the model now
+						if (this.settingsManager.getSttEnabled()) {
+							this.sttService.ensureRunning().catch(() => {});
+						}
+						this.showMessage("STT load mode: auto (model loads on STT enable)");
+					} else if (loadArg === "lazy") {
+						this.settingsManager.setTextstreamLoadMode("lazy");
+						this.sttService.setLoadMode("lazy");
+						this.showMessage("STT load mode: lazy (model loads on first PTT)");
+					} else {
+						const current = this.settingsManager.getTextstreamLoadMode();
+						this.showMessage(`STT load mode: ${current} (use /stt load auto|lazy to change)`);
+					}
 				} else if (arg === "parser" || arg.startsWith("parser ")) {
 					const parserArg = arg.startsWith("parser ") ? arg.slice(7).trim().toLowerCase() : "toggle";
 					if (
@@ -6021,7 +6054,7 @@ export class InteractiveMode {
 		return texts.join(" ");
 	}
 
-	/** Toggle STT recording on/off via TypeWhisper. */
+	/** Toggle STT recording on/off via TextStream streaming ASR. */
 	private async handleRecordingToggle(): Promise<void> {
 		if (!this.sttService.enabled) {
 			this.showWarning("STT is disabled. Use /stt on to enable.");
@@ -6029,32 +6062,15 @@ export class InteractiveMode {
 		}
 
 		if (this.sttService.state === "recording") {
-			// Stop recording and get transcription
+			// Stop recording — onTranscription callback handles auto-submit
 			try {
 				await this.sttService.stopRecording();
-				// Footer indicator shows "transcribing" now
-				const text = await this.sttService.getTranscribedText(60_000);
-				if (text?.trim()) {
-					// Auto-submit if setting enabled and there's meaningful text
-					if (this.settingsManager.getSttAutoSubmit() && text.trim().length > 2) {
-						// Insert into editor and simulate Enter, which triggers
-						// the editor's submitValue(): reads text, clears editor, calls onSubmit
-						this.editor.setText(text);
-						this.editor.handleInput("\r");
-					} else {
-						// Just populate the editor for review
-						this.editor.setText(text);
-					}
-				} else {
-					this.showMessage("(no speech detected)");
-				}
 			} catch (err) {
 				this.sttService.abort();
 				this.showWarning(`Transcription failed: ${err instanceof Error ? err.message : String(err)}`);
 			}
 		} else {
 			// Start recording
-			// If TTS is speaking, stop it first
 			if (this.ttsService.state === "speaking") {
 				this.ttsService.stop();
 			}
@@ -6062,7 +6078,7 @@ export class InteractiveMode {
 			if (sessionId) {
 				// Footer indicator shows 🎤 REC — that's enough feedback
 			} else {
-				this.showWarning("Failed to start recording. Is TypeWhisper running?");
+				this.showWarning("Failed to start recording. Is TextStream running?");
 			}
 		}
 	}

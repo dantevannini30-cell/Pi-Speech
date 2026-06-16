@@ -5,6 +5,12 @@
 export { DEFAULT_PARSER_CONFIG, type ParserConfig, type ParserProvider } from "./parser-provider.ts";
 export { RegexT5Parser } from "./regex-t5-parser.ts";
 export { type STTCallbacks, STTService, type STTServiceConfig, type STTState } from "./stt.ts";
+export {
+	TextStreamClient,
+	type TextStreamClientConfig,
+	type TextStreamClientState,
+	type TextStreamLoadMode,
+} from "./textstream-client.ts";
 export { type TTSCallbacks, TTSService, type TTSServiceConfig, type TTSState } from "./tts.ts";
 export {
 	DEFAULT_TTS_POLISHER_CONFIG,
@@ -12,12 +18,3 @@ export {
 	type TTSPolisherConfig,
 	type TTSPolisherProvider,
 } from "./tts-polisher.ts";
-export {
-	type DictationResult,
-	type ModelInfo,
-	type StatusResult,
-	TypeWhisperAPI,
-	type TypeWhisperConfig,
-	type TypeWhisperEngine,
-	TypeWhisperError,
-} from "./typewhisper-api.ts";
