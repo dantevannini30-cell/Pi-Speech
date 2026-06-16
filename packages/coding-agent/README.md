@@ -99,6 +99,43 @@ Then just talk to pi. By default, pi gives the model four tools: `read`, `write`
 
 ---
 
+## STT Setup (Pi-Speech)
+
+Pi-Speech supports streaming speech-to-text (STT) using [TextStream](https://github.com/199-biotechnologies/textstream-asr),
+a local ASR server running Qwen3-ASR (0.6B) via MLX on Apple Silicon.
+
+### Virtual Environment
+
+TextStream is installed alongside TTS dependencies in the same Python 3.11 virtual environment:
+
+```bash
+cd packages/coding-agent
+python3.11 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+### Usage
+
+- **Push-to-talk:** Press `Ctrl+Space` to start/stop recording.
+- **Streaming:** Transcribed text appears in the editor as you speak.
+- **Auto-submit:** When recording stops, text is automatically submitted (configurable with `/stt auto`).
+
+### Slash Commands
+
+| Command | Description |
+|---------|-------------|
+| `/stt on` / `/stt off` | Enable/disable STT |
+| `/stt auto` | Toggle auto-submit |
+| `/stt parser on` / `/stt parser off` | Enable/disable T5 grammar correction |
+| `/stt load auto` / `/stt load lazy` | Control when TextStream model loads |
+
+### Load Modes
+
+- **auto** (default): TextStream process is spawned when STT is enabled. The model loads in the background ready for instant use.
+- **lazy**: TextStream is spawned on first push-to-talk, saving ~1.2GB RAM when not actively using STT.
+
+---
+
 ## TTS Setup (Pi-Speech)
 
 Pi-Speech supports local text-to-speech (TTS) using Piper and Kokoro through

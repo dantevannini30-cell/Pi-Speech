@@ -114,7 +114,7 @@ export interface Settings {
 	editorPaddingX?: number; // Horizontal padding for input editor (default: 0)
 	autocompleteMaxVisible?: number; // Max visible items in autocomplete dropdown (default: 5)
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
-	sttEnabled?: boolean; // default: true - enable speech-to-text (requires TypeWhisper)
+	sttEnabled?: boolean; // default: true - enable speech-to-text
 	ttsVoice?: string; // TTS voice/model name
 	ttsProvider?: string; // TTS provider: "piper" or "kokoro"
 	ttsEnabled?: boolean; // default: true - enable text-to-speech
@@ -125,6 +125,7 @@ export interface Settings {
 	ttsPolisherTimeoutMs?: number; // default: 3000 - per-polish timeout in milliseconds
 	sttAutoSubmit?: boolean; // default: true - auto-submit STT transcription when recording stops
 	sttParserEnabled?: boolean; // default: true - clean STT output through a local LLM parser
+	textstreamLoadMode?: "auto" | "lazy"; // default: "auto" - when to load TextStream ASR model
 	markdown?: MarkdownSettings;
 	warnings?: WarningSettings;
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
@@ -1266,6 +1267,16 @@ export class SettingsManager {
 	setSttParserEnabled(enabled: boolean): void {
 		this.globalSettings.sttParserEnabled = enabled;
 		this.markModified("sttParserEnabled");
+		this.save();
+	}
+
+	getTextstreamLoadMode(): "auto" | "lazy" {
+		return this.settings.textstreamLoadMode ?? "auto";
+	}
+
+	setTextstreamLoadMode(mode: "auto" | "lazy"): void {
+		this.globalSettings.textstreamLoadMode = mode;
+		this.markModified("textstreamLoadMode");
 		this.save();
 	}
 

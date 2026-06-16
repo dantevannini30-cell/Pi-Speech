@@ -1,8 +1,8 @@
 /**
  * STT (Speech-to-Text) service for Whisper-Pi.
  *
- * Wraps the TypeWhisper HTTP API so the TUI can start/stop dictation
- * and retrieve transcribed text without any Python dependency.
+ * Wraps the TextStream ASR client so the TUI can start/stop dictation
+ * and receive streaming transcription in real time.
  *
  * Optionally integrates a ParserProvider to clean up raw transcription
  * before emitting the onTranscription callback.
@@ -12,11 +12,12 @@
  */
 
 import type { ParserProvider } from "./parser-provider.ts";
-import { TypeWhisperAPI } from "./typewhisper-api.ts";
+import { TextStreamClient, type TextStreamClientConfig, type TextStreamLoadMode } from "./textstream-client.ts";
 
 export interface STTServiceConfig {
 	enabled: boolean;
-	engine?: string;
+	engine?: string; // kept for backward compatibility, unused
+	loadMode?: TextStreamLoadMode;
 }
 
 export type STTState = "idle" | "recording" | "transcribing" | "parsing";
@@ -27,31 +28,34 @@ export type STTState = "idle" | "recording" | "transcribing" | "parsing";
 export interface STTCallbacks {
 	onStateChange?: (state: STTState) => void;
 	onTranscription?: (text: string) => void;
+	onInterimTranscription?: (text: string) => void;
 	onError?: (error: Error) => void;
 }
 
 /**
- * Speech-to-text service that uses TypeWhisper macOS app for dictation.
- * Matches the behavior of whisper-bot's Python TypeWhisperProvider.
+ * Speech-to-text service that uses TextStream (Qwen3-ASR) for streaming dictation.
  *
- * If a ParserProvider is configured, raw transcription text is run through
+ * Provides streaming interim transcriptions via onInterimTranscription and final
+ * transcriptions via onTranscription.
+ *
+ * If a ParserProvider is configured, the final transcription text is run through
  * the parser before being emitted via onTranscription(). The "parsing" state
  * is set while the parser runs.
  */
 export class STTService {
-	private api: TypeWhisperAPI | null = null;
+	private client: TextStreamClient | null = null;
 	private config: STTServiceConfig;
 	private callbacks: STTCallbacks;
 	private _state: STTState = "idle";
-	private currentSessionId: string | null = null;
 	private parserProvider: ParserProvider | null = null;
 	private parserEnabled: boolean = true;
+	private finalizedBuffer: string = "";
 
 	constructor(config: STTServiceConfig, callbacks: STTCallbacks = {}) {
 		this.config = config;
 		this.callbacks = callbacks;
 		if (config.enabled) {
-			this.api = new TypeWhisperAPI({ engine: config.engine });
+			this.createClient(config);
 		}
 	}
 
@@ -63,14 +67,21 @@ export class STTService {
 		return this.config.enabled;
 	}
 
+	get loadMode(): TextStreamLoadMode {
+		return this.client?.loadModeSetting ?? "auto";
+	}
+
 	/**
 	 * Enable or disable the STT service.
 	 * When disabled, all methods become no-ops.
 	 */
 	setEnabled(enabled: boolean): void {
 		this.config.enabled = enabled;
-		if (enabled && !this.api) {
-			this.api = new TypeWhisperAPI({ engine: this.config.engine });
+		if (enabled && !this.client) {
+			this.createClient(this.config);
+		} else if (!enabled && this.client) {
+			this.client.stop().catch(() => {});
+			this.client = null;
 		}
 	}
 
@@ -96,85 +107,113 @@ export class STTService {
 	}
 
 	/**
-	 * Check if TypeWhisper is reachable (and auto-launch if needed).
-	 * Mirrors Python's _ensure_running().
+	 * Set the TextStream load mode.
+	 */
+	setLoadMode(mode: TextStreamLoadMode): void {
+		this.config.loadMode = mode;
+		if (this.client) {
+			this.client.setLoadMode(mode);
+		}
+	}
+
+	/**
+	 * Create the TextStream client and wire its callbacks.
+	 */
+	private createClient(config: STTServiceConfig): void {
+		const clientConfig: TextStreamClientConfig = {
+			loadMode: config.loadMode ?? "auto",
+		};
+		this.client = new TextStreamClient(clientConfig);
+
+		this.client.onFinalizedText = (text) => {
+			// Accumulate finalized text into buffer
+			this.finalizedBuffer += text;
+			this.callbacks.onInterimTranscription?.(this.finalizedBuffer);
+		};
+
+		this.client.onDraftText = (text) => {
+			// Draft text can be shown as interim if we have a draft callback
+			if (this.client && this.client.state === "connected") {
+				// Interim transcription shows the draft appended to finalized buffer
+				this.callbacks.onInterimTranscription?.(this.finalizedBuffer + text);
+			}
+		};
+
+		this.client.onError = (error) => {
+			this.handleError(error);
+		};
+
+		this.client.onConnected = () => {
+			// SSE connected
+		};
+
+		this.client.onDisconnected = () => {
+			// SSE disconnected
+		};
+	}
+
+	/**
+	 * Ensure the TextStream server is running.
+	 * Respects the load mode setting: in "auto" mode, the server was already
+	 * started in the constructor. In "lazy" mode, start is deferred to
+	 * startRecording().
 	 */
 	async ensureRunning(): Promise<boolean> {
-		if (!this.api || !this.config.enabled) return false;
-		return this.api.ensureRunning();
+		if (!this.client || !this.config.enabled) return false;
+		return this.client.start();
 	}
 
 	/**
 	 * Start recording (push-to-talk).
-	 * First ensures TypeWhisper is running (auto-launches if needed).
-	 * Returns the session ID, or null if STT is disabled / failed.
+	 * Resumes the TextStream mic capture and starts receiving SSE events.
 	 */
 	async startRecording(): Promise<string | null> {
-		if (!this.api || !this.config.enabled) return null;
+		if (!this.client || !this.config.enabled) return null;
 
-		// Ensure TypeWhisper is running (matches Python behavior)
-		const running = await this.api.ensureRunning();
-		if (!running) {
-			this.handleError(new Error("TypeWhisper not reachable and could not be auto-launched"));
+		this.finalizedBuffer = "";
+		this.setState("recording");
+
+		const ok = await this.client.resume();
+		if (!ok) {
+			this.handleError(new Error("TextStream failed to resume"));
+			this.setState("idle");
 			return null;
 		}
 
-		try {
-			const sessionId = await this.api.startDictation();
-			this.currentSessionId = sessionId;
-			this.setState("recording");
-			return sessionId;
-		} catch (error) {
-			this.handleError(error instanceof Error ? error : new Error(String(error)));
-			return null;
-		}
+		return "streaming";
 	}
 
 	/**
-	 * Stop recording and begin transcription.
+	 * Stop recording and get the final transcription.
+	 * Pauses the TextStream mic capture, drains any remaining draft text,
+	 * and runs the accumulated finalized text through the parser.
 	 */
 	async stopRecording(): Promise<void> {
-		if (!this.api || !this.config.enabled || !this.currentSessionId) return;
+		if (!this.client || !this.config.enabled) return;
 
-		try {
-			this.setState("transcribing");
-			await this.api.stopDictation(this.currentSessionId);
-		} catch (error) {
-			this.handleError(error instanceof Error ? error : new Error(String(error)));
-			this.setState("idle");
+		this.setState("transcribing");
+
+		// Pause and drain any remaining draft
+		const draftText = await this.client.pause();
+
+		// Combine finalized buffer with any drained draft text
+		let combined = this.finalizedBuffer;
+		if (draftText) {
+			combined += draftText;
 		}
-	}
+		this.finalizedBuffer = "";
 
-	/**
-	 * Poll for and return the transcribed text.
-	 * If a parser is configured, the text is passed through the parser
-	 * before being emitted via onTranscription().
-	 * Returns empty string if not yet ready or STT is disabled.
-	 */
-	async getTranscribedText(timeoutMs = 60_000): Promise<string> {
-		if (!this.api || !this.config.enabled || !this.currentSessionId) return "";
+		this.setState("idle");
 
-		try {
-			const rawText = await this.api.waitForTranscription(this.currentSessionId, timeoutMs);
-			this.currentSessionId = null;
-			this.setState("idle");
+		if (!combined) {
+			return;
+		}
 
-			if (!rawText) {
-				return "";
-			}
+		// Run through parser if configured and enabled
+		const text = this.parserEnabled && this.parserProvider ? await this.runParser(combined) : combined;
 
-			// Run through parser if configured and enabled
-			const text = this.parserEnabled && this.parserProvider ? await this.runParser(rawText) : rawText;
-
-			if (text) {
-				this.callbacks.onTranscription?.(text);
-			}
-			return text;
-		} catch (error) {
-			this.handleError(error instanceof Error ? error : new Error(String(error)));
-			this.currentSessionId = null;
-			this.setState("idle");
-			return "";
+		if (text) {
+			this.callbacks.onTranscription?.(text);
 		}
 	}
 
@@ -198,8 +237,14 @@ export class STTService {
 
 	/** Abort current recording without transcribing and reset state to idle. */
 	abort(): void {
-		this.currentSessionId = null;
+		this.finalizedBuffer = "";
+		this.client?.pause().catch(() => {});
 		this.setState("idle");
+	}
+
+	/** Get the current accumulated finalized text (for display purposes). */
+	getCurrentFinalizedText(): string {
+		return this.finalizedBuffer;
 	}
 
 	private setState(state: STTState): void {
