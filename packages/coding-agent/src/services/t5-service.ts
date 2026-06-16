@@ -33,7 +33,6 @@ async function ensureLoaded(): Promise<void> {
 			// subject-verb agreement, tense, articles, casing, etc.
 			// ~11MB quantized, ~30-115ms inference on CPU.
 			const pipe = await pipeline("text2text-generation", "rabden/t5-tiny-gec-hone", {
-				quantized: true,
 				dtype: "q8",
 			});
 			generator = pipe;

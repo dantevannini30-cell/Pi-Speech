@@ -33,7 +33,8 @@ export interface TTSPolisherProvider {
  * Matches  ... ,  ... , and similar markers.
  */
 function stripThinkingTags(text: string): string {
-	return text.replace(/<(?:think|scratchpad|reasoning|thought|planning|reflection)>[\s\S]*?<\/\1>/gi, "");
+	// Match all variants: <think>, <thinking>, <scratchpad>, etc.
+	return text.replace(/<(thinking|think|scratchpad|reasoning|thought|planning|reflection)>[\s\S]*?<\/\1>/gi, "");
 }
 
 /**

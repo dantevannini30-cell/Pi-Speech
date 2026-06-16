@@ -18,6 +18,8 @@ export interface STTServiceConfig {
 	enabled: boolean;
 	engine?: string; // kept for backward compatibility, unused
 	loadMode?: TextStreamLoadMode;
+	debug?: boolean; // when true, emit verbose debug logs to stderr
+	noVad?: boolean; // when true, disable Silero VAD (feed all audio to ASR)
 }
 
 export type STTState = "idle" | "recording" | "transcribing" | "parsing";
@@ -49,14 +51,22 @@ export class STTService {
 	private _state: STTState = "idle";
 	private parserProvider: ParserProvider | null = null;
 	private parserEnabled: boolean = true;
+	private debug: boolean = false;
 	private finalizedBuffer: string = "";
+	private lastDraftText: string = "";
 
 	constructor(config: STTServiceConfig, callbacks: STTCallbacks = {}) {
 		this.config = config;
+		this.debug = config.debug ?? false;
 		this.callbacks = callbacks;
 		if (config.enabled) {
 			this.createClient(config);
 		}
+	}
+
+	/** Log only when debug is enabled. */
+	private log(...args: unknown[]): void {
+		if (this.debug) console.debug(...args);
 	}
 
 	get state(): STTState {
@@ -96,6 +106,16 @@ export class STTService {
 		}
 	}
 
+	/**
+	 * Enable or disable Silero VAD at runtime.
+	 * When disabled, all audio (including silence) is fed to the ASR model.
+	 * Calls GET /vad?enabled=true|false on the textstream server.
+	 */
+	async setVadEnabled(enabled: boolean): Promise<boolean> {
+		if (!this.client || !this.config.enabled) return false;
+		return this.client.setVadEnabled(enabled);
+	}
+
 	/** Enable or disable the parser step. */
 	setParserEnabled(enabled: boolean): void {
 		this.parserEnabled = enabled;
@@ -121,17 +141,25 @@ export class STTService {
 	 */
 	private createClient(config: STTServiceConfig): void {
 		const clientConfig: TextStreamClientConfig = {
+			debug: config.debug ?? false,
+			noVad: config.noVad ?? false,
 			loadMode: config.loadMode ?? "auto",
 		};
 		this.client = new TextStreamClient(clientConfig);
 
 		this.client.onFinalizedText = (text) => {
-			// Accumulate finalized text into buffer
-			this.finalizedBuffer += text;
+			// Server sends full stable text each time, so replace (not append)
+			this.log("[STT] onFinalizedText:", JSON.stringify(text.slice(-80)));
+			this.finalizedBuffer = text;
 			this.callbacks.onInterimTranscription?.(this.finalizedBuffer);
 		};
 
 		this.client.onDraftText = (text) => {
+			this.log("[STT] onDraftText:", JSON.stringify(text.slice(-60)));
+			// Store last draft as fallback for when /engine drain misses it
+			if (text) {
+				this.lastDraftText = text;
+			}
 			// Draft text can be shown as interim if we have a draft callback
 			if (this.client && this.client.state === "connected") {
 				// Interim transcription shows the draft appended to finalized buffer
@@ -144,12 +172,18 @@ export class STTService {
 		};
 
 		this.client.onConnected = () => {
-			// SSE connected
+			this.log("[STT] SSE connected");
 		};
 
 		this.client.onDisconnected = () => {
-			// SSE disconnected
+			this.log("[STT] SSE disconnected");
 		};
+
+		// For "auto" load mode, start the server immediately so it's ready
+		// for the first push-to-talk. Errors are routed via onError.
+		if (config.loadMode !== "lazy") {
+			this.client.start().catch(() => {});
+		}
 	}
 
 	/**
@@ -168,18 +202,25 @@ export class STTService {
 	 * Resumes the TextStream mic capture and starts receiving SSE events.
 	 */
 	async startRecording(): Promise<string | null> {
-		if (!this.client || !this.config.enabled) return null;
+		if (!this.client || !this.config.enabled) {
+			this.log("[STT] startRecording: client or config disabled");
+			return null;
+		}
 
 		this.finalizedBuffer = "";
+		this.lastDraftText = "";
 		this.setState("recording");
+		this.log("[STT] startRecording: calling client.resume()");
 
 		const ok = await this.client.resume();
 		if (!ok) {
+			this.log("[STT] startRecording: client.resume() returned false");
 			this.handleError(new Error("TextStream failed to resume"));
 			this.setState("idle");
 			return null;
 		}
 
+		this.log("[STT] startRecording: resumed OK, returning streaming");
 		return "streaming";
 	}
 
@@ -189,31 +230,55 @@ export class STTService {
 	 * and runs the accumulated finalized text through the parser.
 	 */
 	async stopRecording(): Promise<void> {
-		if (!this.client || !this.config.enabled) return;
+		if (!this.client || !this.config.enabled) {
+			this.log("[STT] stopRecording: client or config disabled");
+			return;
+		}
 
 		this.setState("transcribing");
 
 		// Pause and drain any remaining draft
+		this.log("[STT] stopRecording: calling client.pause()");
 		const draftText = await this.client.pause();
+		this.log("[STT] stopRecording: draftText from pause:", JSON.stringify(draftText));
 
-		// Combine finalized buffer with any drained draft text
+		// Combine finalized buffer with any drained draft text.
+		// Fall back to lastDraftText (from SSE) when the /engine drain misses it
+		// due to the race between SSE broadcast and /engine poll.
 		let combined = this.finalizedBuffer;
-		if (draftText) {
-			combined += draftText;
+		const effectiveDraft = draftText || this.lastDraftText;
+		if (effectiveDraft) {
+			combined = combined ? combined + " " + effectiveDraft : effectiveDraft;
 		}
+		this.log(
+			"[STT] stopRecording: finalizedBuffer:",
+			JSON.stringify(this.finalizedBuffer),
+			"draftText:",
+			JSON.stringify(draftText),
+			"lastDraftText:",
+			JSON.stringify(this.lastDraftText),
+			"combined:",
+			JSON.stringify(combined),
+		);
 		this.finalizedBuffer = "";
+		this.lastDraftText = "";
 
 		this.setState("idle");
 
 		if (!combined) {
+			this.log("[STT] stopRecording: combined empty, returning early");
 			return;
 		}
 
 		// Run through parser if configured and enabled
 		const text = this.parserEnabled && this.parserProvider ? await this.runParser(combined) : combined;
+		this.log("[STT] stopRecording: final text:", JSON.stringify(text));
 
 		if (text) {
+			this.log("[STT] stopRecording: firing onTranscription");
 			this.callbacks.onTranscription?.(text);
+		} else {
+			this.log("[STT] stopRecording: text empty after parser");
 		}
 	}
 
@@ -238,6 +303,7 @@ export class STTService {
 	/** Abort current recording without transcribing and reset state to idle. */
 	abort(): void {
 		this.finalizedBuffer = "";
+		this.lastDraftText = "";
 		this.client?.pause().catch(() => {});
 		this.setState("idle");
 	}

@@ -460,6 +460,8 @@ export class InteractiveMode {
 			{
 				enabled: sttEnabled,
 				loadMode: this.settingsManager.getTextstreamLoadMode(),
+				debug: this.settingsManager.getSttDebug(),
+				noVad: this.settingsManager.getSttNoVad(),
 			},
 			{
 				onStateChange: (state) => {
@@ -473,14 +475,22 @@ export class InteractiveMode {
 					this.ui.requestRender();
 				},
 				onTranscription: (text) => {
+					console.debug("[STT] onTranscription called, text:", JSON.stringify(text));
 					if (text?.trim()) {
-						if (this.settingsManager.getSttAutoSubmit() && text.trim().length > 2) {
+						const autoSubmit = this.settingsManager.getSttAutoSubmit();
+						console.debug("[STT] autoSubmit:", autoSubmit, "length:", text.trim().length);
+						if (autoSubmit && text.trim().length > 2) {
+							console.debug("[STT] setting editor text and sending Enter");
 							this.editor.setText(text);
+							console.debug("[STT] editor text set, calling handleInput");
 							this.editor.handleInput("\r");
+							console.debug("[STT] handleInput returned");
 						} else {
+							console.debug("[STT] setting editor text only (no auto-submit)");
 							this.editor.setText(text);
 						}
 					} else {
+						console.debug("[STT] empty text, showing warning");
 						this.showMessage("(no speech detected)");
 					}
 				},
@@ -2832,6 +2842,25 @@ export class InteractiveMode {
 						this.settingsManager.setSttParserEnabled(false);
 						this.sttService.setParserEnabled(false);
 						this.showMessage("STT parser disabled");
+					}
+				} else if (arg === "vad" || arg.startsWith("vad ")) {
+					const vadArg = arg.startsWith("vad ") ? arg.slice(4).trim().toLowerCase() : "toggle";
+					if (
+						vadArg === "on" ||
+						vadArg === "enable" ||
+						(vadArg === "toggle" && this.settingsManager.getSttNoVad())
+					) {
+						this.settingsManager.setSttNoVad(false);
+						this.sttService.setVadEnabled(true).catch(() => {});
+						this.showMessage("STT VAD enabled (silence filtered)");
+					} else if (
+						vadArg === "off" ||
+						vadArg === "disable" ||
+						(vadArg === "toggle" && !this.settingsManager.getSttNoVad())
+					) {
+						this.settingsManager.setSttNoVad(true);
+						this.sttService.setVadEnabled(false).catch(() => {});
+						this.showMessage("STT VAD disabled (all audio to model)");
 					}
 				}
 				return;
@@ -5826,7 +5855,7 @@ export class InteractiveMode {
 |-----|--------|
 | \`${recordingToggle}\` | Toggle STT recording (start/stop dictation) |
 | \`${ttsToggle}\` | Toggle TTS (text-to-speech) on/off |
-| \`/stt\` | STT commands: \`/stt on\`, \`/stt off\`, \`/stt auto\` |
+| \`/stt\` | STT commands: \`/stt on\`, \`/stt off\`, \`/stt auto\`, \`/stt vad\` |
 | \`/tts\` | TTS commands: \`/tts on\`, \`/tts off\`, \`/tts polish\` |
 | \`/speed\` | Set TTS playback speed: \`/speed\` (show), \`/speed 2\` (0.5-3.0, step 0.25) |
 `;
@@ -6056,25 +6085,32 @@ export class InteractiveMode {
 
 	/** Toggle STT recording on/off via TextStream streaming ASR. */
 	private async handleRecordingToggle(): Promise<void> {
+		console.debug("[STT] handleRecordingToggle called, state:", this.sttService.state);
 		if (!this.sttService.enabled) {
+			console.debug("[STT] STT disabled");
 			this.showWarning("STT is disabled. Use /stt on to enable.");
 			return;
 		}
 
 		if (this.sttService.state === "recording") {
 			// Stop recording — onTranscription callback handles auto-submit
+			console.debug("[STT] stopping recording");
 			try {
 				await this.sttService.stopRecording();
+				console.debug("[STT] stopRecording completed");
 			} catch (err) {
+				console.debug("[STT] stopRecording error:", err);
 				this.sttService.abort();
 				this.showWarning(`Transcription failed: ${err instanceof Error ? err.message : String(err)}`);
 			}
 		} else {
 			// Start recording
+			console.debug("[STT] starting recording");
 			if (this.ttsService.state === "speaking") {
 				this.ttsService.stop();
 			}
 			const sessionId = await this.sttService.startRecording();
+			console.debug("[STT] startRecording returned:", sessionId);
 			if (sessionId) {
 				// Footer indicator shows 🎤 REC — that's enough feedback
 			} else {

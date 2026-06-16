@@ -126,6 +126,8 @@ export interface Settings {
 	sttAutoSubmit?: boolean; // default: true - auto-submit STT transcription when recording stops
 	sttParserEnabled?: boolean; // default: true - clean STT output through a local LLM parser
 	textstreamLoadMode?: "auto" | "lazy"; // default: "auto" - when to load TextStream ASR model
+	sttDebug?: boolean; // default: false - enable verbose STT debug logging
+	sttNoVad?: boolean; // default: false - disable Silero VAD on STT startup
 	markdown?: MarkdownSettings;
 	warnings?: WarningSettings;
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
@@ -1277,6 +1279,26 @@ export class SettingsManager {
 	setTextstreamLoadMode(mode: "auto" | "lazy"): void {
 		this.globalSettings.textstreamLoadMode = mode;
 		this.markModified("textstreamLoadMode");
+		this.save();
+	}
+
+	getSttDebug(): boolean {
+		return this.settings.sttDebug ?? false;
+	}
+
+	setSttDebug(enabled: boolean): void {
+		this.globalSettings.sttDebug = enabled;
+		this.markModified("sttDebug");
+		this.save();
+	}
+
+	getSttNoVad(): boolean {
+		return this.settings.sttNoVad ?? false;
+	}
+
+	setSttNoVad(enabled: boolean): void {
+		this.globalSettings.sttNoVad = enabled;
+		this.markModified("sttNoVad");
 		this.save();
 	}
 
