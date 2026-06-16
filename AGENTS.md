@@ -224,3 +224,17 @@ Attribution:
 ## User Override
 
 If the user's instructions conflict with any rule in this document, ask for explicit confirmation before overriding. Only then execute their instructions.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as GitHub Issues on `dantevannini30-cell/Pi-Speech`. Uses the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary (needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Multi-context layout. Root `CONTEXT.md` provides a high-level overview and domain glossary; `CONTEXT-MAP.md` points to per-package `CONTEXT.md` files in `packages/coding-agent/`, `packages/ai/`, `packages/agent/`, and `packages/tui/`. See `docs/agents/domain.md`.
